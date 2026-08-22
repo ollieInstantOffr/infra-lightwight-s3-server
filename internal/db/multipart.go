@@ -208,7 +208,7 @@ func ListMultipartUploads(ctx context.Context, q Querier, bucketID, keyMarker st
 // row is written, the assembled blob retained, every part blob released, and
 // the upload removed — so a failure leaves the upload intact and retryable
 // rather than half-consumed.
-func CompleteMultipartUpload(ctx context.Context, pool *Pool, upload *MultipartUpload, object *Object) error {
+func CompleteMultipartUpload(ctx context.Context, pool *Pool, upload *MultipartUpload, object *Object, opts WriteOptions) error {
 	metadata, err := json.Marshal(object.Metadata)
 	if err != nil {
 		return fmt.Errorf("encode object metadata: %w", err)
@@ -225,10 +225,12 @@ func CompleteMultipartUpload(ctx context.Context, pool *Pool, upload *MultipartU
 		return fmt.Errorf("lock object key: %w", err)
 	}
 
-	var previousDigest string
-	err = tx.QueryRow(ctx,
-		`SELECT blob_digest FROM objects WHERE bucket_id = $1 AND key = $2`,
-		object.BucketID, object.Key).Scan(&previousDigest)
+	var previous Object
+	err = tx.QueryRow(ctx, `
+		SELECT blob_digest, size, etag, content_type, metadata
+		FROM objects WHERE bucket_id = $1 AND key = $2`,
+		object.BucketID, object.Key).Scan(&previous.BlobDigest, &previous.Size, &previous.ETag,
+		&previous.ContentType, &previousMetadataHolder{&previous})
 	hadPrevious := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("read existing object: %w", err)
@@ -236,6 +238,19 @@ func CompleteMultipartUpload(ctx context.Context, pool *Pool, upload *MultipartU
 
 	if err := RetainBlob(ctx, tx, object.BlobDigest, object.Size); err != nil {
 		return err
+	}
+
+	// A multipart completion replaces the key just as a plain PUT does, so it
+	// preserves the superseded state the same way.
+	if opts.Versioning && hadPrevious {
+		superseded := &ObjectVersion{
+			BucketID: object.BucketID, Key: object.Key, BlobDigest: &previous.BlobDigest,
+			Size: previous.Size, ETag: previous.ETag, ContentType: previous.ContentType,
+			Metadata: previous.Metadata, CreatedBy: opts.Actor,
+		}
+		if err := RecordVersion(ctx, tx, superseded); err != nil {
+			return err
+		}
 	}
 
 	err = tx.QueryRow(ctx, `
@@ -257,7 +272,7 @@ func CompleteMultipartUpload(ctx context.Context, pool *Pool, upload *MultipartU
 	}
 
 	if hadPrevious {
-		if _, err := ReleaseBlob(ctx, tx, previousDigest); err != nil {
+		if _, err := ReleaseBlob(ctx, tx, previous.BlobDigest); err != nil {
 			return err
 		}
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/console"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/metrics"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/s3api"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/storage"
@@ -113,6 +114,8 @@ func run() error {
 		return err
 	}
 
+	collector := metrics.New()
+
 	s3Server := &s3api.Server{
 		DB:        pool,
 		Blobs:     blobs,
@@ -120,6 +123,7 @@ func run() error {
 		Region:    cfg.S3Region,
 		PublicURL: cfg.PublicS3URL,
 		S3Domain:  cfg.S3Domain,
+		Metrics:   collector,
 		Verifier: &s3api.Verifier{
 			Region:  cfg.S3Region,
 			Proxies: proxies,
@@ -167,11 +171,22 @@ func run() error {
 		Mailer:        mailer,
 		Proxies:       proxies,
 		Log:           log,
+		AdminEmail:    cfg.AdminEmail,
 		PublicURL:     cfg.PublicConsoleURL,
 		PublicS3URL:   cfg.PublicS3URL,
 		Region:        cfg.S3Region,
 		SessionSecret: cfg.SessionSecret,
 		Assets:        consoleAssets(log),
+		System: console.SystemInfo{
+			Version:           version,
+			NodeName:          nodeName(),
+			StartedAt:         time.Now(),
+			DataDir:           cfg.DataDir,
+			S3Domain:          cfg.S3Domain,
+			TrustedProxyCount: len(cfg.TrustedProxies),
+			ResendConfigured:  cfg.ResendConfigured(),
+			Environment:       string(cfg.Env),
+		},
 	}
 
 	warnIfNoCredentials(startupCtx, pool, log)
@@ -209,6 +224,9 @@ func run() error {
 	// Background reclamation runs for the life of the process and stops with
 	// the shutdown signal.
 	go runMaintenance(ctx, pool, blobs, log)
+	// Request counts are accumulated in memory and flushed on a ticker, so the
+	// request path never waits on the database to record a graph.
+	go collector.Run(ctx, pool, log)
 
 	// serveErr carries the first listener failure. It is buffered so a failing
 	// goroutine never blocks on a shutdown that is already under way.
@@ -250,6 +268,17 @@ func run() error {
 	wg.Wait()
 	log.Info("stopped")
 	return runErr
+}
+
+// nodeName identifies this server on the system screen. The hostname is what
+// an operator recognises, and inside a container it is the container id, which
+// is exactly what they would paste into `docker logs`.
+func nodeName() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "s3d"
+	}
+	return host
 }
 
 type namedServer struct {

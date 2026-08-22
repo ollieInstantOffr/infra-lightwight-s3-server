@@ -1,0 +1,130 @@
+/* Fonts are bundled rather than fetched from Google Fonts.
+   This console is meant to run on private, sometimes air-gapped networks; a
+   stylesheet link to fonts.googleapis.com would hang on load and then fall
+   back to system fonts, which is exactly where a typographic design shows its
+   absence most. These packages ship the woff2 files, so Vite emits them
+   alongside the bundle and the binary carries them. */
+@import "@fontsource-variable/plus-jakarta-sans";
+@import "@fontsource-variable/jetbrains-mono";
+
+@import "tailwindcss";
+
+/* ─── Pail design tokens ─────────────────────────────────────────────────────
+   Taken directly from the supplied design. Values are literal rather than
+   derived: they came from a designed palette, and re-deriving them in a
+   different colour space would shift hues that were chosen deliberately. */
+@theme {
+  /* Surfaces, lightest to darkest */
+  --color-page: #eef2f1;
+  --color-card: #ffffff;
+  --color-inset: #f7fbfa;
+  --color-rail: #f4f7f6;
+  --color-well: #f3f8f6;
+
+  /* Ink */
+  --color-ink: #12211d;
+  --color-ink-muted: #5f736d;
+  --color-ink-faint: #8a9c96;
+  --color-ink-heading: #9aaba5;
+  --color-ink-label: #3d514b;
+
+  /* Lines */
+  --color-line: #e0eae7;
+  --color-line-input: #d5e3df;
+  --color-line-row: #eef4f2;
+
+  /* Accent */
+  --color-accent: #2f9e78;
+  --color-accent-hover: #25795d;
+  --color-accent-soft: #eaf6f1;
+  --color-accent-deep: #1c5e48;
+  --color-on-accent: #052018;
+  --color-accent-wash: #dcece6;
+
+  /* Status */
+  --color-danger: #c0392b;
+  --color-danger-soft: #fdecea;
+  --color-warn: #b7791f;
+  --color-warn-soft: #fdf3e3;
+  --color-ok: #2f9e78;
+  --color-ok-soft: #eaf6f1;
+
+  /* Type */
+  --font-sans: "Plus Jakarta Sans Variable", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace;
+
+  /* Radii, from the design's own scale */
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --radius-nav: 9px;
+  --radius-tag: 5px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-size: 13.5px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* The design's shimmer and spin, used by skeletons and inline waits. */
+@keyframes pailShimmer {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+@keyframes pailSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@utility skeleton {
+  background: linear-gradient(90deg, #f3f8f6 0%, #e8f0ed 45%, #f3f8f6 90%);
+  background-size: 220% 100%;
+  animation: pailShimmer 1.6s linear infinite;
+  border-radius: 6px;
+}
+
+@utility skeleton-faint {
+  background: linear-gradient(90deg, #f7fbfa 0%, #edf4f2 45%, #f7fbfa 90%);
+  background-size: 220% 100%;
+  animation: pailShimmer 1.6s linear infinite;
+  border-radius: 6px;
+}
+
+/* Focus is drawn in the accent rather than the browser default, but never
+   removed: keyboard navigation through a file browser is a real workflow. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

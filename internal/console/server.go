@@ -36,6 +36,14 @@ type Server struct {
 	// case the API still works and the root returns a plain message.
 	Assets http.Handler
 
+	// AdminEmail is the bootstrap administrator, shown on the first-run screen
+	// so a fresh install says which address can sign in.
+	AdminEmail string
+
+	// System is the static description of this node, shown on the system
+	// screen and fixed at startup.
+	System SystemInfo
+
 	// Now is injectable for tests.
 	Now func() time.Time
 }
@@ -88,6 +96,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/buckets/{bucket}/object", s.requireSession(s.handleDownloadObject))
 	mux.HandleFunc("POST /api/buckets/{bucket}/share", s.requireSession(s.handleShareObject))
 	mux.HandleFunc("GET /api/dashboard", s.requireSession(s.handleDashboard))
+	mux.HandleFunc("GET /api/traffic", s.requireSession(s.handleTraffic))
+	mux.HandleFunc("GET /api/search", s.requireSession(s.handleSearch))
+
+	// Bucket settings, versions and folders.
+	mux.HandleFunc("GET /api/buckets/{bucket}/settings", s.requireSession(s.handleGetBucketSettings))
+	mux.HandleFunc("PUT /api/buckets/{bucket}/settings", s.requireAdmin(s.handleSaveBucketSettings))
+	mux.HandleFunc("GET /api/buckets/{bucket}/versions", s.requireSession(s.handleListVersions))
+	mux.HandleFunc("POST /api/buckets/{bucket}/versions/restore", s.requireSession(s.handleRestoreVersion))
+	mux.HandleFunc("POST /api/buckets/{bucket}/versions/purge", s.requireSession(s.handlePurgeVersions))
+	mux.HandleFunc("POST /api/buckets/{bucket}/folders", s.requireSession(s.handleCreateFolder))
+
+	// The node itself.
+	mux.HandleFunc("GET /api/system", s.requireSession(s.handleSystem))
+	mux.HandleFunc("GET /api/audit", s.requireAdmin(s.handleAuditLog))
+
+	// Account and sessions.
+	mux.HandleFunc("GET /api/account/sessions", s.requireSession(s.handleListSessions))
+	mux.HandleFunc("DELETE /api/account/sessions/{id}", s.requireSession(s.handleRevokeSession))
+	mux.HandleFunc("POST /api/account/sessions/revoke-others", s.requireSession(s.handleRevokeOtherSessions))
+
+	// Whether the console has ever been used, so the app can show the first-run
+	// screen instead of an unexplained sign-in form. Unauthenticated by
+	// necessity, and reports only a boolean plus the bootstrap address, which
+	// is already in the operator's own .env.
+	mux.HandleFunc("GET /api/setup", s.handleSetupState)
 
 	mux.HandleFunc("/", s.serveApp)
 

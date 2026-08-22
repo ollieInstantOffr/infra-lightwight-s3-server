@@ -116,6 +116,7 @@ func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Log.Info("created a bucket", "bucket", request.Name, "by", user.Email)
+	s.audit(r, db.ActionBucketCreate, "bucket", request.Name, nil)
 	writeJSON(w, http.StatusCreated, map[string]string{"name": request.Name})
 }
 
@@ -127,6 +128,7 @@ func (s *Server) handleDeleteBucket(w http.ResponseWriter, r *http.Request) {
 	switch err := db.DeleteBucket(r.Context(), s.DB, name); {
 	case err == nil:
 		s.Log.Info("deleted a bucket", "bucket", name, "by", user.Email)
+		s.audit(r, db.ActionBucketDelete, "bucket", name, nil)
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Bucket deleted."})
 	case errors.Is(err, db.ErrBucketNotFound):
 		writeError(w, http.StatusNotFound, "No such bucket.")
@@ -245,7 +247,7 @@ func (s *Server) handleUploadObject(w http.ResponseWriter, r *http.Request) {
 		ETag:        blob.ETag,
 		ContentType: uploadContentType(r, key),
 	}
-	if err := db.PutObject(r.Context(), s.DB, object); err != nil {
+	if err := db.PutObject(r.Context(), s.DB, object, s.writeOptions(r.Context(), bucket)); err != nil {
 		s.internalError(w, r, "record upload", err)
 		return
 	}
@@ -253,6 +255,8 @@ func (s *Server) handleUploadObject(w http.ResponseWriter, r *http.Request) {
 	user, _ := UserFrom(r.Context())
 	s.Log.Info("uploaded an object",
 		"bucket", bucket.Name, "key", key, "bytes", blob.Size, "by", user.Email)
+	s.audit(r, db.ActionObjectUpload, "object", bucket.Name+"/"+key,
+		map[string]any{"bytes": blob.Size, "contentType": object.ContentType})
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"key": key, "size": blob.Size, "etag": object.ETag, "contentType": object.ContentType,
@@ -309,10 +313,11 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	options := s.writeOptions(ctx, bucket)
 	deleted := 0
 	var failures []string
 	for _, key := range keys {
-		if _, err := db.DeleteObject(ctx, s.DB, bucket.ID, key); err != nil {
+		if _, err := db.DeleteObject(ctx, s.DB, bucket.ID, key, options); err != nil {
 			s.Log.Error("could not delete object", "bucket", bucket.Name, "key", key, "error", err)
 			failures = append(failures, key)
 			continue
@@ -323,6 +328,8 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	user, _ := UserFrom(ctx)
 	s.Log.Info("deleted objects",
 		"bucket", bucket.Name, "count", deleted, "failed", len(failures), "by", user.Email)
+	s.audit(r, db.ActionObjectDelete, "bucket", bucket.Name,
+		map[string]any{"deleted": deleted, "failed": len(failures), "prefix": request.Prefix})
 
 	status := http.StatusOK
 	if len(failures) > 0 {
@@ -439,6 +446,9 @@ func (s *Server) handleShareObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.audit(r, db.ActionShareLink, "object", bucket.Name+"/"+request.Key,
+		map[string]any{"expiresSeconds": int(expiry.Seconds())})
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"url":       url,
 		"expiresAt": s.now().Add(expiry),
@@ -461,6 +471,22 @@ func (s *Server) signingCredential(ctx context.Context) (*db.Credential, error) 
 		return db.LookupCredential(ctx, s.DB, s.Cipher, credentials[i].AccessKeyID)
 	}
 	return nil, errNoSigningCredential
+}
+
+// writeOptions resolves the per-bucket behaviour a write depends on, and
+// attributes the change to the signed-in user so version history says who.
+func (s *Server) writeOptions(ctx context.Context, bucket *db.Bucket) db.WriteOptions {
+	settings, err := db.GetBucketSettings(ctx, s.DB, bucket.ID)
+	if err != nil {
+		s.Log.Warn("could not read bucket settings; proceeding without versioning",
+			"bucket", bucket.Name, "error", err)
+		return db.WriteOptions{}
+	}
+	actor := "console"
+	if user, ok := UserFrom(ctx); ok {
+		actor = user.Email
+	}
+	return db.WriteOptions{Versioning: settings.Versioning, Actor: actor}
 }
 
 // requireBucket resolves the bucket named in the path.

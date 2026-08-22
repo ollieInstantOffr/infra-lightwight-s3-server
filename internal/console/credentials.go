@@ -55,6 +55,8 @@ func (s *Server) handleCreateCredential(w http.ResponseWriter, r *http.Request) 
 
 	s.Log.Info("created an S3 credential",
 		"access_key_id", credential.AccessKeyID, "by", owner.Email)
+	s.audit(r, db.ActionCredentialCreate, "credential", credential.AccessKeyID,
+		map[string]any{"description": credential.Description})
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"accessKeyId":     credential.AccessKeyID,
@@ -76,6 +78,7 @@ func (s *Server) handleRevokeCredential(w http.ResponseWriter, r *http.Request) 
 	switch err := db.RevokeCredential(r.Context(), s.DB, accessKeyID); {
 	case err == nil:
 		s.Log.Info("revoked an S3 credential", "access_key_id", accessKeyID, "by", actor.Email)
+		s.audit(r, db.ActionCredentialRevoke, "credential", accessKeyID, nil)
 		writeJSON(w, http.StatusOK, map[string]string{
 			"message": "Revoked. It stops working on the next request.",
 		})

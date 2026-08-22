@@ -24,6 +24,15 @@ type Server struct {
 	// S3Domain enables virtual-host style addressing when set: a request to
 	// bucket.s3.example.com names that bucket. Empty means path-style only.
 	S3Domain string
+	// Metrics counts requests for the console's overview. Optional: nil simply
+	// means nothing is counted.
+	Metrics RequestCounter
+}
+
+// RequestCounter accumulates request counts. The metrics collector satisfies
+// it; taking an interface keeps this package independent of it.
+type RequestCounter interface {
+	Record(status int, bytesIn, bytesOut int64)
 }
 
 // Handler builds the routed, authenticated handler for the S3 listener.
@@ -32,8 +41,13 @@ type Server struct {
 // is traceable, then access logging so rejections are logged too, then
 // authentication, and only then routing.
 func (s *Server) Handler() http.Handler {
-	return WithRequestID(WithAccessLog(s.Log,
-		s.Verifier.Authenticate(s.Log, http.HandlerFunc(s.route))))
+	var handler http.Handler = http.HandlerFunc(s.route)
+	handler = s.Authenticate(s.Log, handler)
+	handler = WithAccessLog(s.Log, handler)
+	if s.Metrics != nil {
+		handler = WithMetrics(s.Metrics, handler)
+	}
+	return WithRequestID(handler)
 }
 
 // route dispatches a request to the right handler.
@@ -206,4 +220,27 @@ func splitPath(escapedPath string) (bucket, key string, err error) {
 		return "", "", err
 	}
 	return bucket, key, nil
+}
+
+// writeOptions resolves the per-bucket behaviour a write depends on.
+//
+// Settings are read per request rather than cached. A cache would need
+// invalidating from the console process, and the query is a single indexed
+// lookup against a table with one row per bucket — cheaper than the bug.
+func (s *Server) writeOptions(r *http.Request, bucket *db.Bucket) db.WriteOptions {
+	settings, err := db.GetBucketSettings(r.Context(), s.DB, bucket.ID)
+	if err != nil {
+		// Failing closed here would reject writes because of a settings read.
+		// Versioning off is the safe default: the write still succeeds, and
+		// the worst case is a missing history entry, which is logged.
+		s.Log.Warn("could not read bucket settings; proceeding without versioning",
+			"bucket", bucket.Name, "error", err)
+		return db.WriteOptions{}
+	}
+
+	actor := "s3"
+	if identity, ok := IdentityFrom(r.Context()); ok {
+		actor = identity.AccessKeyID
+	}
+	return db.WriteOptions{Versioning: settings.Versioning, Actor: actor}
 }

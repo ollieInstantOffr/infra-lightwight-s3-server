@@ -248,7 +248,7 @@ func (s *Server) handleCompleteMultipartUpload(w http.ResponseWriter, r *http.Re
 		ContentType: upload.ContentType,
 		Metadata:    upload.Metadata,
 	}
-	if err := db.CompleteMultipartUpload(r.Context(), s.DB, upload, object); err != nil {
+	if err := db.CompleteMultipartUpload(r.Context(), s.DB, upload, object, s.writeOptions(r, bucket)); err != nil {
 		s.internal(w, r, "complete multipart upload", err)
 		return
 	}

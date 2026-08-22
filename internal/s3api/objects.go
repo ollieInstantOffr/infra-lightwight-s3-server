@@ -79,7 +79,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request) {
 		ContentType: contentTypeOf(r),
 		Metadata:    metadata,
 	}
-	if err := db.PutObject(r.Context(), s.DB, object); err != nil {
+	if err := db.PutObject(r.Context(), s.DB, object, s.writeOptions(r, bucket)); err != nil {
 		s.internal(w, r, "write object metadata", err)
 		return
 	}
@@ -152,7 +152,7 @@ func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request) {
 	}
 	key := keyOf(r)
 
-	if _, err := db.DeleteObject(r.Context(), s.DB, bucket.ID, key); err != nil {
+	if _, err := db.DeleteObject(r.Context(), s.DB, bucket.ID, key, s.writeOptions(r, bucket)); err != nil {
 		s.internal(w, r, "delete object", err)
 		return
 	}

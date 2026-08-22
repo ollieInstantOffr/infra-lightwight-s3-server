@@ -45,12 +45,23 @@ func objectLockID(bucketID, key string) int64 {
 	return int64(h.Sum64())
 }
 
+// WriteOptions carries the per-bucket behaviour a write depends on.
+type WriteOptions struct {
+	// Versioning keeps the previous state as history rather than discarding
+	// it. The old blob then stays referenced by its version, so the space is
+	// not reclaimed until the versions are purged.
+	Versioning bool
+	// Actor is recorded on the version, so history says who changed what.
+	Actor string
+}
+
 // PutObject writes or replaces an object.
 //
 // The blob must already be on disk. Reference counting is adjusted in the same
 // transaction as the metadata: the new blob is retained, and any blob the key
-// previously pointed at is released.
-func PutObject(ctx context.Context, pool *Pool, obj *Object) error {
+// previously pointed at is released — unless versioning is on, in which case
+// the previous state becomes a version that holds its own reference.
+func PutObject(ctx context.Context, pool *Pool, obj *Object, opts WriteOptions) error {
 	metadata, err := json.Marshal(obj.Metadata)
 	if err != nil {
 		return fmt.Errorf("encode object metadata: %w", err)
@@ -68,10 +79,12 @@ func PutObject(ctx context.Context, pool *Pool, obj *Object) error {
 	}
 
 	// Under the lock, whatever the key points at now is stable.
-	var previousDigest string
-	err = tx.QueryRow(ctx,
-		`SELECT blob_digest FROM objects WHERE bucket_id = $1 AND key = $2`,
-		obj.BucketID, obj.Key).Scan(&previousDigest)
+	var previous Object
+	err = tx.QueryRow(ctx, `
+		SELECT blob_digest, size, etag, content_type, metadata
+		FROM objects WHERE bucket_id = $1 AND key = $2`,
+		obj.BucketID, obj.Key).Scan(&previous.BlobDigest, &previous.Size, &previous.ETag,
+		&previous.ContentType, &previousMetadataHolder{&previous})
 	hadPrevious := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("read existing object: %w", err)
@@ -79,6 +92,20 @@ func PutObject(ctx context.Context, pool *Pool, obj *Object) error {
 
 	if err := RetainBlob(ctx, tx, obj.BlobDigest, obj.Size); err != nil {
 		return err
+	}
+
+	// With versioning on, the state being replaced is preserved as a version,
+	// which takes its own reference to the old blob before the live one is
+	// released below.
+	if opts.Versioning && hadPrevious {
+		superseded := &ObjectVersion{
+			BucketID: obj.BucketID, Key: obj.Key, BlobDigest: &previous.BlobDigest,
+			Size: previous.Size, ETag: previous.ETag, ContentType: previous.ContentType,
+			Metadata: previous.Metadata, CreatedBy: opts.Actor,
+		}
+		if err := RecordVersion(ctx, tx, superseded); err != nil {
+			return err
+		}
 	}
 
 	err = tx.QueryRow(ctx, `
@@ -102,7 +129,7 @@ func PutObject(ctx context.Context, pool *Pool, obj *Object) error {
 	// unchanged: an overwrite with identical bytes retained a second reference
 	// above, and the key still accounts for exactly one.
 	if hadPrevious {
-		if _, err := ReleaseBlob(ctx, tx, previousDigest); err != nil {
+		if _, err := ReleaseBlob(ctx, tx, previous.BlobDigest); err != nil {
 			return err
 		}
 	}
@@ -143,7 +170,7 @@ func GetObject(ctx context.Context, q Querier, bucketID, key string) (*Object, e
 //
 // Deleting a key that does not exist is not an error: S3 makes DELETE
 // idempotent, and clients rely on that when cleaning up.
-func DeleteObject(ctx context.Context, pool *Pool, bucketID, key string) (deleted bool, err error) {
+func DeleteObject(ctx context.Context, pool *Pool, bucketID, key string, opts WriteOptions) (deleted bool, err error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin delete object: %w", err)
@@ -155,10 +182,12 @@ func DeleteObject(ctx context.Context, pool *Pool, bucketID, key string) (delete
 		return false, fmt.Errorf("lock object key: %w", err)
 	}
 
-	var digest string
-	err = tx.QueryRow(ctx,
-		`DELETE FROM objects WHERE bucket_id = $1 AND key = $2 RETURNING blob_digest`,
-		bucketID, key).Scan(&digest)
+	var removed Object
+	err = tx.QueryRow(ctx, `
+		DELETE FROM objects WHERE bucket_id = $1 AND key = $2
+		RETURNING blob_digest, size, etag, content_type, metadata`,
+		bucketID, key).Scan(&removed.BlobDigest, &removed.Size, &removed.ETag,
+		&removed.ContentType, &previousMetadataHolder{&removed})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, tx.Commit(ctx)
 	}
@@ -166,11 +195,57 @@ func DeleteObject(ctx context.Context, pool *Pool, bucketID, key string) (delete
 		return false, fmt.Errorf("delete object %q: %w", key, err)
 	}
 
-	if _, err := ReleaseBlob(ctx, tx, digest); err != nil {
+	if opts.Versioning {
+		// The deleted state is kept as a version, and a delete marker records
+		// that the key was removed at this point. The bytes stay referenced by
+		// the version, so the space is not reclaimed until it is purged.
+		superseded := &ObjectVersion{
+			BucketID: bucketID, Key: key, BlobDigest: &removed.BlobDigest,
+			Size: removed.Size, ETag: removed.ETag, ContentType: removed.ContentType,
+			Metadata: removed.Metadata, CreatedBy: opts.Actor,
+		}
+		if err := RecordVersion(ctx, tx, superseded); err != nil {
+			return false, err
+		}
+		marker := &ObjectVersion{
+			BucketID: bucketID, Key: key, IsDeleteMarker: true, CreatedBy: opts.Actor,
+		}
+		if err := RecordVersion(ctx, tx, marker); err != nil {
+			return false, err
+		}
+	}
+
+	if _, err := ReleaseBlob(ctx, tx, removed.BlobDigest); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("commit delete object: %w", err)
 	}
 	return true, nil
+}
+
+// previousMetadataHolder decodes a JSONB metadata column straight into an
+// Object while scanning, so reading the superseded row needs one round trip
+// rather than a scan followed by a separate decode.
+type previousMetadataHolder struct{ target *Object }
+
+func (h previousMetadataHolder) ScanBytes(raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	return json.Unmarshal(raw, &h.target.Metadata)
+}
+
+// Scan satisfies sql.Scanner, which is the interface pgx reaches for when a
+// destination is not one of its known types.
+func (h previousMetadataHolder) Scan(value any) error {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []byte:
+		return h.ScanBytes(typed)
+	case string:
+		return h.ScanBytes([]byte(typed))
+	}
+	return fmt.Errorf("cannot decode metadata from %T", value)
 }

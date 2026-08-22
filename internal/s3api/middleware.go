@@ -107,10 +107,26 @@ func IdentityFrom(ctx context.Context) (*Identity, bool) {
 
 // Authenticate verifies the signature on every request and rejects anything
 // that does not check out, in the S3 error dialect.
-func (v *Verifier) Authenticate(log *slog.Logger, next http.Handler) http.Handler {
+func (s *Server) Authenticate(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, err := v.Verify(r.Context(), r)
+		// CORS is applied before authentication because a preflight carries no
+		// signature by definition: the browser sends OPTIONS with no
+		// credentials, and rejecting it would block every cross-origin request
+		// before the real one is ever attempted.
+		if s.applyCORS(w, r) {
+			return
+		}
+
+		id, err := s.Verifier.Verify(r.Context(), r)
 		if err != nil {
+			// A public bucket serves anonymous reads. Checked only after
+			// verification has failed, so the cost falls on anonymous traffic
+			// rather than on every signed request.
+			if s.allowAnonymous(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			// Logged in full here, but reported to the client only as the
 			// mapped S3 code: the detail is useful to an operator and useful to
 			// an attacker probing for valid access key ids.
@@ -124,5 +140,29 @@ func (v *Verifier) Authenticate(log *slog.Logger, next http.Handler) http.Handle
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(WithIdentity(r.Context(), id)))
+	})
+}
+
+// WithMetrics counts requests for the console's overview.
+//
+// The counter accumulates in memory and is flushed periodically, so this adds
+// a mutex and two increments to the request path rather than a database write.
+func WithMetrics(counter RequestCounter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &responseRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		// ContentLength is -1 for a chunked upload, where the size is not known
+		// until it has been read; counting it as zero understates bytes in
+		// rather than inventing a number.
+		bytesIn := r.ContentLength
+		if bytesIn < 0 {
+			bytesIn = 0
+		}
+		counter.Record(status, bytesIn, recorder.written)
 	})
 }

@@ -86,6 +86,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Log.Info("invited a user", "email", email, "role", role, "by", inviter.Email)
+	s.audit(r, db.ActionUserInvite, "user", email, map[string]any{"role": role})
 	writeJSON(w, http.StatusCreated, inviteResponse(invite))
 }
 
@@ -107,6 +108,7 @@ func (s *Server) handleListInvites(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRevokeInvite(w http.ResponseWriter, r *http.Request) {
 	switch err := db.RevokeInvite(r.Context(), s.DB, r.PathValue("id")); {
 	case err == nil:
+		s.audit(r, db.ActionInviteRevoke, "invite", r.PathValue("id"), nil)
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Invitation withdrawn."})
 	case errors.Is(err, db.ErrInviteInvalid):
 		writeError(w, http.StatusNotFound, "That invitation no longer exists.")
@@ -139,6 +141,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	switch err := db.DeleteUser(r.Context(), s.DB, targetID); {
 	case err == nil:
 		s.Log.Info("removed a user", "id", targetID, "by", actor.Email)
+		s.audit(r, db.ActionUserRemove, "user", targetID, nil)
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Member removed."})
 	case errors.Is(err, db.ErrUserNotFound):
 		writeError(w, http.StatusNotFound, "That member no longer exists.")
@@ -170,6 +173,7 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 	switch err := db.SetUserRole(r.Context(), s.DB, r.PathValue("id"), request.Role); {
 	case err == nil:
 		s.Log.Info("changed a user's role", "id", r.PathValue("id"), "role", request.Role, "by", actor.Email)
+		s.audit(r, db.ActionUserRole, "user", r.PathValue("id"), map[string]any{"role": request.Role})
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Role updated."})
 	case errors.Is(err, db.ErrUserNotFound):
 		writeError(w, http.StatusNotFound, "That member no longer exists.")

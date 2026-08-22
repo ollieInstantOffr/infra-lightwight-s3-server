@@ -289,3 +289,73 @@ func truncate(s string, max int) string {
 	}
 	return s[:max]
 }
+
+// SessionInfo describes an active session for the account screen.
+type SessionInfo struct {
+	ID          string
+	UserAgent   *string
+	IP          *string
+	CreatedAt   time.Time
+	LastSeenAt  time.Time
+	IdleExpires time.Time
+	// Current marks the session making the request, which must be shown and
+	// must not be revocable from the list: revoking it would sign the user out
+	// from the button they just pressed, which reads as a bug.
+	Current bool
+}
+
+// ListSessions returns a user's live sessions, newest first.
+func ListSessions(ctx context.Context, q Querier, userID string, currentHash []byte) ([]SessionInfo, error) {
+	rows, err := q.Query(ctx, `
+		SELECT id::text, user_agent, host(ip), created_at, last_seen_at, idle_expires_at,
+		       token_hash = $2
+		FROM sessions
+		WHERE user_id = $1
+		  AND revoked_at IS NULL
+		  AND idle_expires_at > now()
+		  AND absolute_expires_at > now()
+		ORDER BY last_seen_at DESC`, userID, currentHash)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SessionInfo
+	for rows.Next() {
+		var session SessionInfo
+		if err := rows.Scan(&session.ID, &session.UserAgent, &session.IP,
+			&session.CreatedAt, &session.LastSeenAt, &session.IdleExpires, &session.Current); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		out = append(out, session)
+	}
+	return out, rows.Err()
+}
+
+// RevokeSessionByID ends one session, provided it belongs to the given user.
+//
+// Scoping to the owner matters: a session id is only as secret as the listing
+// that produced it, and without this check one user could sign out another.
+func RevokeSessionByID(ctx context.Context, q Querier, userID, sessionID string) error {
+	tag, err := q.Exec(ctx, `
+		UPDATE sessions SET revoked_at = now()
+		WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`, sessionID, userID)
+	if err != nil {
+		return fmt.Errorf("revoke session: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSessionInvalid
+	}
+	return nil
+}
+
+// RevokeOtherSessions ends every session a user holds except the current one.
+func RevokeOtherSessions(ctx context.Context, q Querier, userID string, currentHash []byte) (int64, error) {
+	tag, err := q.Exec(ctx, `
+		UPDATE sessions SET revoked_at = now()
+		WHERE user_id = $1 AND token_hash <> $2 AND revoked_at IS NULL`, userID, currentHash)
+	if err != nil {
+		return 0, fmt.Errorf("revoke other sessions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}

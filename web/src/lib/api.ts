@@ -1,0 +1,209 @@
+// The console's API client.
+//
+// Every call is same-origin and carries the session cookie, so there is no
+// token to store in the browser and nothing for a script to steal. A 401 means
+// the session ended, and is surfaced as a distinct error type so the app can
+// redirect to sign-in rather than showing a generic failure.
+
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = "ApiError";
+  }
+
+  /** The session has ended or was never established. */
+  get isUnauthenticated(): boolean {
+    return this.status === 401;
+  }
+
+  /** Signed in, but not permitted to do this. */
+  get isForbidden(): boolean {
+    return this.status === 403;
+  }
+}
+
+type RequestOptions = {
+  method?: string;
+  body?: unknown;
+  signal?: AbortSignal;
+};
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { method = "GET", body, signal } = options;
+
+  const response = await fetch(path, {
+    method,
+    signal,
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    // Cookies are same-origin here, but stating it makes the intent explicit
+    // and survives someone later pointing the app at another origin.
+    credentials: "same-origin",
+  });
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const text = await response.text();
+  let payload: unknown;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    // A non-JSON body from an API route means something upstream failed —
+    // a proxy error page, typically. Reporting the status is more useful than
+    // reporting a parse error.
+    throw new ApiError(response.status, `The server returned an unexpected response (${response.status}).`);
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof payload === "object" && payload !== null && "error" in payload
+        ? String((payload as { error: unknown }).error)
+        : `Request failed (${response.status}).`;
+    throw new ApiError(response.status, message);
+  }
+
+  return payload as T;
+}
+
+export const api = {
+  get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
+  post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
+  put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
+  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+};
+
+// ─── Shapes the API returns ──────────────────────────────────────────────────
+
+export type User = {
+  id: string;
+  email: string;
+  role: "ADMIN" | "MEMBER";
+  isAdmin: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+
+export type Bucket = {
+  name: string;
+  createdAt: string;
+  objectCount: number;
+  totalBytes: number;
+};
+
+export type StoredObject = {
+  key: string;
+  name: string;
+  size: number;
+  etag: string;
+  contentType: string;
+  lastModified: string;
+};
+
+export type Folder = {
+  prefix: string;
+  name: string;
+};
+
+export type ObjectListing = {
+  bucket: string;
+  prefix: string;
+  folders: Folder[];
+  objects: StoredObject[];
+  isTruncated: boolean;
+  nextAfter: string;
+};
+
+export type Credential = {
+  accessKeyId: string;
+  description: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revoked: boolean;
+  revokedAt: string | null;
+};
+
+export type CreatedCredential = {
+  accessKeyId: string;
+  secretAccessKey: string;
+  description: string;
+  endpoint: string;
+  region: string;
+  warning: string;
+  snippets: Record<string, string>;
+};
+
+export type Invite = {
+  id: string;
+  email: string;
+  role: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+export type Dashboard = {
+  buckets: number;
+  objects: number;
+  bytesStored: number;
+  diskFree: number;
+  diskTotal: number;
+  durabilityNote: string;
+};
+
+// ─── Uploads ─────────────────────────────────────────────────────────────────
+
+/**
+ * Uploads one file, reporting progress.
+ *
+ * XMLHttpRequest rather than fetch: fetch still cannot report upload progress
+ * in any browser, and a large upload with no progress bar is indistinguishable
+ * from a hung one.
+ */
+export function uploadObject(
+  bucket: string,
+  key: string,
+  file: File,
+  onProgress: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `/api/buckets/${encodeURIComponent(bucket)}/objects?key=${encodeURIComponent(key)}`);
+    request.withCredentials = true;
+    if (file.type) {
+      request.setRequestHeader("Content-Type", file.type);
+    }
+
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onProgress(event.loaded / event.total);
+      }
+    });
+
+    request.addEventListener("load", () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(1);
+        resolve();
+        return;
+      }
+      let message = `Upload failed (${request.status}).`;
+      try {
+        const parsed = JSON.parse(request.responseText) as { error?: string };
+        if (parsed.error) message = parsed.error;
+      } catch {
+        // Keep the status-based message.
+      }
+      reject(new ApiError(request.status, message));
+    });
+
+    request.addEventListener("error", () => reject(new ApiError(0, "The upload could not reach the server.")));
+    request.addEventListener("abort", () => reject(new ApiError(0, "Upload cancelled.")));
+
+    signal?.addEventListener("abort", () => request.abort());
+    request.send(file);
+  });
+}

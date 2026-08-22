@@ -182,6 +182,8 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Log.Info("signed in", "email", user.Email, "ip", s.Proxies.ClientIP(r))
+	s.auditFor(r.Context(), user, db.ActionSignIn, "user", user.Email,
+		s.Proxies.ClientIP(r), r.UserAgent(), nil)
 	http.Redirect(w, r, s.PublicURL+"/", http.StatusSeeOther)
 }
 
@@ -241,8 +243,17 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, user *db.U
 // handleLogout ends the session server-side as well as clearing the cookie.
 // Clearing the cookie alone would leave a copied session token valid.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Logout is deliberately not behind requireSession: signing out with an
+	// already-expired session must still clear the cookie rather than return a
+	// 401 at the moment the user is trying to leave. The actor is therefore
+	// resolved here, before the session is revoked and while it is still known.
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		if err := db.RevokeSession(r.Context(), s.DB, db.HashToken(cookie.Value)); err != nil {
+		hash := db.HashToken(cookie.Value)
+		if user, err := db.TouchSession(r.Context(), s.DB, hash, sessionIdleTTL); err == nil {
+			s.auditFor(r.Context(), user, db.ActionSignOut, "user", user.Email,
+				s.Proxies.ClientIP(r), r.UserAgent(), nil)
+		}
+		if err := db.RevokeSession(r.Context(), s.DB, hash); err != nil {
 			s.Log.Warn("could not revoke session", "error", err)
 		}
 	}

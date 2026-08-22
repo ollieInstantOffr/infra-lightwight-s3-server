@@ -89,11 +89,12 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 		return
 	}
 
+	options := s.writeOptions(r, bucket)
 	result := DeleteResult{Xmlns: s3Namespace}
 	for _, target := range request.Objects {
 		// One key failing must not abandon the rest: S3 reports per-key
 		// outcomes so a client can retry only what actually failed.
-		if _, err := db.DeleteObject(r.Context(), s.DB, bucket.ID, target.Key); err != nil {
+		if _, err := db.DeleteObject(r.Context(), s.DB, bucket.ID, target.Key, options); err != nil {
 			s.Log.Error("batch delete failed for one key",
 				"request_id", RequestIDFrom(r.Context()),
 				"bucket", bucket.Name, "key", target.Key, "error", err)
@@ -185,7 +186,7 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, destin
 		ContentType: contentType,
 		Metadata:    metadata,
 	}
-	if err := db.PutObject(r.Context(), s.DB, object); err != nil {
+	if err := db.PutObject(r.Context(), s.DB, object, s.writeOptions(r, destination)); err != nil {
 		s.internal(w, r, "copy object", err)
 		return
 	}
