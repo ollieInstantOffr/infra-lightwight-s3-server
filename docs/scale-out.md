@@ -7,6 +7,8 @@ bucket, and no single point of failure anywhere.
 This is a large piece of work. The document exists to make the size and the
 decisions visible before any of it starts.
 
+![Distributed architecture](images/cluster-architecture.png)
+
 ---
 
 ## 1. What was asked for
@@ -108,30 +110,41 @@ main risk, and it should be proven before anything else is built on it.
 
 ## 4. Storage design
 
-### Three paths, chosen per object
+### Four modes, chosen per bucket
 
-| Path | When | Overhead | Survives |
-| ---- | ---- | -------- | -------- |
-| Replication | Object below the bucket's size threshold | ×RF | RF−1 losses |
-| Erasure coding | Object at or above the threshold | (k+m)/k | m losses |
-| Single copy | RF=1, EC off — the current behaviour | ×1 | nothing |
+| Mode | Overhead | Survives | For |
+| ---- | -------- | -------- | --- |
+| `single` | ×1 | nothing | One node, or storage already redundant beneath |
+| `replicate` | ×RF | RF−1 losses | Small objects, hot data, lowest latency |
+| `erasure` | (k+m)/k | m losses | Large objects; half the space of RF=3 for the same tolerance |
+| `hybrid` | mixed | per object | **Replication below a size threshold, erasure coding at or above it** |
 
-Small objects are replicated because erasure coding them is actively worse: a
-1 KB object split into six shards is six near-empty files plus placement
-metadata, costing more space than three whole copies and more IOPS to read.
-MinIO and Ceph both do this; the threshold is the only sensible knob.
+**Hybrid is a first-class mode, not a side effect of setting a threshold.** It is
+what most buckets should actually use, and it needs both sets of parameters
+configured and validated together.
+
+The reason it exists: erasure coding a 1 KB object produces k+m near-empty shards
+plus placement metadata — more space than three whole copies, and k disk reads to
+serve instead of one. Replication is cheaper and faster below roughly 128 KB;
+erasure coding is dramatically cheaper above it. A bucket holding both thumbnails
+and video is served badly by either alone. MinIO and Ceph both do this.
 
 ### Per-bucket policy
 
 ```
 durability:
-  mode: replicate | erasure | single
-  replication_factor: 2
-  erasure: { data: 4, parity: 2 }
-  small_object_threshold: 131072
+  mode: single | replicate | erasure | hybrid
+  replication_factor: 3           # replicate, and hybrid below the threshold
+  erasure: { data: 4, parity: 2 } # erasure, and hybrid at or above it
+  small_object_threshold: 131072  # hybrid only
   failure_domain: node | rack | datacenter
   placement: local | spread
 ```
+
+**A policy is only as good as the topology.** A 4+2 scheme needs six failure
+domains to mean anything: with `failure_domain: datacenter` and two sites it
+cannot be honoured, and the console has to refuse it rather than accept it and
+quietly under-protect the data.
 
 `failure_domain` is what makes multi-datacentre real: it declares what the
 scheme must survive. `datacenter` means shards are placed so that losing a whole
