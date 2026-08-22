@@ -87,6 +87,10 @@ test-db-up: ## Start the Postgres the tests use
 test-db-down: ## Stop the test Postgres
 	-docker rm -f $(TEST_PG_CONTAINER) 2>/dev/null
 
+.PHONY: setup
+setup: ## Configure and start the stack, asking what it needs
+	./setup.sh
+
 .PHONY: docker
 docker: ## Build the container image
 	docker build --build-arg VERSION=$(VERSION) -t s3d:$(VERSION) -t s3d:latest .

@@ -30,32 +30,41 @@ use something else.
 ```bash
 git clone https://github.com/ollieInstantOffr/infra-lightwight-s3-server.git
 cd infra-lightwight-s3-server
+./setup.sh
+```
+
+The script asks what it cannot work out — who administers it, whether this is
+local or behind a reverse proxy, and where it will be reached — then generates
+the secrets, writes `.env`, builds, starts, and offers to create your first
+access key.
+
+It is safe to re-run. `./setup.sh --configure` changes the configuration
+without starting anything, and `--start` starts with the configuration you
+already have. Re-running preserves `CREDENTIALS_KEY`, because replacing it
+would silently invalidate every access key that already exists.
+
+By default the console is on <http://localhost:9001> and the S3 API on
+<http://localhost:9000>.
+
+<details>
+<summary>Configuring it by hand instead</summary>
+
+```bash
 cp .env.example .env
 ```
 
-Fill in `.env`. Four values have no sensible default:
+Four values have no sensible default:
 
-```bash
-# Generate the two secrets
-openssl rand -base64 32   # SESSION_SECRET
-openssl rand -base64 32   # CREDENTIALS_KEY
-```
+| Variable            | What it is                                                     |
+| ------------------- | -------------------------------------------------------------- |
+| `ADMIN_EMAIL`       | The first administrator. Can always sign in, invites the rest. |
+| `POSTGRES_PASSWORD` | Anything; it never leaves the compose network.                 |
+| `SESSION_SECRET`    | Signs console session cookies. `openssl rand -base64 32`        |
+| `CREDENTIALS_KEY`   | Encrypts S3 secret keys at rest. **Back this up.**              |
 
-| Variable          | What it is                                                     |
-| ----------------- | -------------------------------------------------------------- |
-| `ADMIN_EMAIL`     | The first administrator. Can always sign in, invites the rest. |
-| `POSTGRES_PASSWORD` | Anything; it never leaves the compose network.               |
-| `SESSION_SECRET`  | Signs console session cookies.                                  |
-| `CREDENTIALS_KEY` | Encrypts S3 secret keys at rest. **Back this up.**              |
+Then `docker compose up -d`.
 
-Then:
-
-```bash
-docker compose up -d
-```
-
-The console is on <http://localhost:9001>, the S3 API on
-<http://localhost:9000>.
+</details>
 
 Sign in with your `ADMIN_EMAIL`. Without a Resend key the sign-in link is
 written to the log rather than emailed:
@@ -63,8 +72,6 @@ written to the log rather than emailed:
 ```bash
 docker compose logs s3d | grep callback
 ```
-
-Create an access key in the console, and you have a working S3 endpoint.
 
 ---
 
