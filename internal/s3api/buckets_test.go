@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -209,4 +210,15 @@ func TestCreateBucketWithInvalidNameIsRejected(t *testing.T) {
 	if code := apiErrorCode(err); code != "InvalidBucketName" {
 		t.Errorf("error code = %q, want InvalidBucketName", code)
 	}
+}
+
+// httpStatusOf extracts the HTTP status from an SDK error, which is how
+// conditional-request outcomes (304, 412) are observed: the SDK surfaces them
+// as errors rather than as responses.
+func httpStatusOf(err error) int {
+	var responseErr *awshttp.ResponseError
+	if errors.As(err, &responseErr) {
+		return responseErr.HTTPStatusCode()
+	}
+	return 0
 }

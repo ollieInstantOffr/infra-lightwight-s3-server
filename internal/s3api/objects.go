@@ -95,6 +95,11 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if status := checkPreconditions(r, object); status != 0 {
+		writeConditionalResponse(w, r, status, object)
+		return
+	}
+
 	file, err := s.Blobs.Open(object.BlobDigest)
 	if err != nil {
 		// Metadata without bytes means the store and the database have
@@ -121,6 +126,11 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request) {
 	object, ok := s.lookupObject(w, r)
 	if !ok {
+		return
+	}
+
+	if status := checkPreconditions(r, object); status != 0 {
+		writeConditionalResponse(w, r, status, object)
 		return
 	}
 

@@ -61,6 +61,12 @@ func (v *Verifier) now() time.Time {
 // authorised would let an unauthenticated caller stream arbitrary data at the
 // server. Body handles payload integrity afterwards, as the handler reads.
 func (v *Verifier) Verify(ctx context.Context, r *http.Request) (*Identity, error) {
+	// A query-string signature means a presigned URL, which a browser can use
+	// without ever holding a credential.
+	if IsPresigned(r) {
+		return v.verifyPresigned(ctx, r)
+	}
+
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return nil, ErrMissingAuthorization

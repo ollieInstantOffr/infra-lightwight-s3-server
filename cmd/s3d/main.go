@@ -118,6 +118,7 @@ func run() error {
 		Log:       log,
 		Region:    cfg.S3Region,
 		PublicURL: cfg.PublicS3URL,
+		S3Domain:  cfg.S3Domain,
 		Verifier: &s3api.Verifier{
 			Region:  cfg.S3Region,
 			Proxies: proxies,

@@ -21,6 +21,9 @@ type Server struct {
 	// address it binds to: TLS terminates at the reverse proxy. It appears in
 	// the Location of a completed multipart upload.
 	PublicURL string
+	// S3Domain enables virtual-host style addressing when set: a request to
+	// bucket.s3.example.com names that bucket. Empty means path-style only.
+	S3Domain string
 }
 
 // Handler builds the routed, authenticated handler for the S3 listener.
@@ -42,7 +45,7 @@ func (s *Server) Handler() http.Handler {
 // rewrites them cannot serve them. Routing here is simple enough that reading
 // the raw path directly is both shorter and correct.
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
-	bucket, key, err := splitPath(r.URL.EscapedPath())
+	bucket, key, err := s.resolveAddressing(r)
 	if err != nil {
 		WriteError(w, r, ErrInvalidArgument.WithMessage("The request URI is not valid."))
 		return
@@ -70,6 +73,15 @@ func (s *Server) routeService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routeBucket(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+		// Batch delete is a POST on the bucket with a ?delete subresource,
+		// which is how `aws s3 rm --recursive` removes a thousand keys in one
+		// request rather than a thousand.
+		s.withBucket(w, r, s.handleDeleteObjects)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPut:
 		s.handleCreateBucket(w, r)
@@ -107,6 +119,15 @@ func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.Method == http.MethodGet && uploadID != "":
 		s.withUpload(w, r, uploadID, s.handleListParts)
+		return
+	}
+
+	// A PUT carrying x-amz-copy-source is a server-side copy, not an upload.
+	if r.Method == http.MethodPut && r.Header.Get("x-amz-copy-source") != "" {
+		source := r.Header.Get("x-amz-copy-source")
+		s.withBucket(w, r, func(w http.ResponseWriter, r *http.Request, bucket *db.Bucket) {
+			s.handleCopyObject(w, r, bucket, source)
+		})
 		return
 	}
 
