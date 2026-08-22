@@ -15,6 +15,14 @@ import (
 	"strings"
 )
 
+// Default ports. Both serve plain HTTP: TLS terminates at the reverse proxy,
+// so despite 8443 and 8444 reading as TLS ports by convention, nothing here
+// listens for a handshake. Point the proxy at them over http://.
+const (
+	defaultS3Port      = 8443
+	defaultConsolePort = 8444
+)
+
 // Environment names the deployment mode. Development relaxes a few checks that
 // would otherwise make local work tedious, such as requiring a real Resend key.
 type Environment string
@@ -88,8 +96,8 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Env:              env,
-		S3Port:           envInt("S3_PORT", 9000, fail),
-		ConsolePort:      envInt("CONSOLE_PORT", 9001, fail),
+		S3Port:           envInt("S3_PORT", defaultS3Port, fail),
+		ConsolePort:      envInt("CONSOLE_PORT", defaultConsolePort, fail),
 		DataDir:          envStr("DATA_DIR", "/data"),
 		DatabaseURL:      envStr("DATABASE_URL", ""),
 		PublicS3URL:      strings.TrimRight(envStr("PUBLIC_S3_URL", ""), "/"),

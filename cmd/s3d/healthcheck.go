@@ -29,7 +29,7 @@ func runHealthcheck(args []string) (handled bool) {
 	// wrong — which is exactly when it is being consulted.
 	port := os.Getenv("CONSOLE_PORT")
 	if port == "" {
-		port = "9001"
+		port = "8444"
 	}
 
 	client := &http.Client{Timeout: healthcheckTimeout}

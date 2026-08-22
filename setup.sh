@@ -213,8 +213,8 @@ configure() {
 
   local public_s3 public_console s3_domain="" bind_address
   if [[ $placement == 1 ]]; then
-    public_s3="http://localhost:9000"
-    public_console="http://localhost:9001"
+    public_s3="http://localhost:8443"
+    public_console="http://localhost:8444"
     bind_address="127.0.0.1"
     muted "S3 API:  $public_s3"
     muted "Console: $public_console"
@@ -341,6 +341,12 @@ write_env_file() {
 
 ENV=production
 
+# ─── Listeners ───────────────────────────────────────────────────────────────
+# Ports inside the container. Both serve plain HTTP; TLS terminates at your
+# reverse proxy.
+S3_PORT=8443
+CONSOLE_PORT=8444
+
 # ─── Public identity ─────────────────────────────────────────────────────────
 # The URLs clients actually reach you on. SigV4 signs the hostname, so these
 # must match what clients use or every S3 request fails to verify.
@@ -439,8 +445,8 @@ offer_first_key() {
 
 show_next_steps() {
   local console_url s3_url has_email
-  console_url=$(read_env PUBLIC_CONSOLE_URL || echo "http://localhost:9001")
-  s3_url=$(read_env PUBLIC_S3_URL || echo "http://localhost:9000")
+  console_url=$(read_env PUBLIC_CONSOLE_URL || echo "http://localhost:8444")
+  s3_url=$(read_env PUBLIC_S3_URL || echo "http://localhost:8443")
   has_email=$(read_env RESEND_API_KEY || echo "")
 
   heading "Ready"

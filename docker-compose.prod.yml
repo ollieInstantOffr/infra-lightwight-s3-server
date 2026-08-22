@@ -13,8 +13,8 @@ services:
       # Loopback only. The reverse proxy connects over it; nothing else can.
       # Change these to 0.0.0.0 only if the proxy runs on a different host, and
       # then firewall them.
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
+      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:8444:8444"
     logging:
       driver: json-file
       options:

@@ -7,8 +7,8 @@ Two ports means two proxy hosts:
 
 | Proxy host              | Forwards to    | What it serves                    |
 | ----------------------- | -------------- | --------------------------------- |
-| `s3.example.com`        | `s3d:9000`     | The S3 API — SDKs, aws-cli, links |
-| `console.example.com`   | `s3d:9001`     | The web console                   |
+| `s3.example.com`        | `s3d:8443`     | The S3 API — SDKs, aws-cli, links |
+| `console.example.com`   | `s3d:8444`     | The web console                   |
 
 They are separate because a bucket can be named anything, including `assets` or
 `api`. On one hostname, a bucket would eventually collide with a console route.
@@ -19,7 +19,7 @@ They are separate because a bucket can be named anything, including `assets` or
 
 Both names are ordinary `A` records pointing at the **public IPv4 address of the
 machine running Nginx Proxy Manager** — not at the container, and not at the
-9000/9001 ports. The proxy is what listens on 443; it is the only thing DNS
+8443/8444 ports. The proxy is what listens on 443; it is the only thing DNS
 needs to find.
 
 | Type | Name      | Value            |

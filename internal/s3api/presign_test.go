@@ -220,7 +220,7 @@ func TestBucketFromHost(t *testing.T) {
 		ok                 bool
 	}{
 		{"mybucket.s3.example.com", "s3.example.com", "mybucket", true},
-		{"mybucket.s3.example.com:9000", "s3.example.com", "mybucket", true},
+		{"mybucket.s3.example.com:8443", "s3.example.com", "mybucket", true},
 		{"MyBucket.S3.Example.Com", "s3.example.com", "mybucket", true},
 		{"mybucket.s3.example.com.", "s3.example.com", "mybucket", true},
 		// The bare domain is not a bucket; it is the service endpoint.

@@ -43,8 +43,8 @@ without starting anything, and `--start` starts with the configuration you
 already have. Re-running preserves `CREDENTIALS_KEY`, because replacing it
 would silently invalidate every access key that already exists.
 
-By default the console is on <http://localhost:9001> and the S3 API on
-<http://localhost:9000>.
+By default the console is on <http://localhost:8444> and the S3 API on
+<http://localhost:8443>.
 
 <details>
 <summary>Configuring it by hand instead</summary>

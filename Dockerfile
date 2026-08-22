@@ -68,17 +68,17 @@ COPY --from=build --chown=65532:65532 /data /data
 
 VOLUME ["/data"]
 
-# 9000 speaks the S3 API, 9001 serves the console. They are separate so bucket
+# 8443 speaks the S3 API, 8444 serves the console. They are separate so bucket
 # paths can never collide with console routes, and so each can be given its own
 # hostname in a reverse proxy.
-EXPOSE 9000 9001
+EXPOSE 8443 8444
 
 # nonroot is uid 65532. The data volume must be writable by it; the compose
 # file uses a named volume, which Docker creates with the right ownership.
 USER nonroot:nonroot
 
 ENV DATA_DIR=/data \
-    S3_PORT=9000 \
-    CONSOLE_PORT=9001
+    S3_PORT=8443 \
+    CONSOLE_PORT=8444
 
 ENTRYPOINT ["/usr/local/bin/s3d"]

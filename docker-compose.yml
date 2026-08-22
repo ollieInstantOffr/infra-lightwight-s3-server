@@ -19,8 +19,8 @@ services:
         condition: service_healthy
     environment:
       ENV: ${ENV:-production}
-      S3_PORT: 9000
-      CONSOLE_PORT: 9001
+      S3_PORT: 8443
+      CONSOLE_PORT: 8444
       DATA_DIR: /data
       DATABASE_URL: postgres://s3d:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/s3d?sslmode=disable
       PUBLIC_S3_URL: ${PUBLIC_S3_URL:?set PUBLIC_S3_URL in .env}
@@ -35,8 +35,8 @@ services:
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "${S3_BIND:-127.0.0.1}:9000:9000"
-      - "${CONSOLE_BIND:-127.0.0.1}:9001:9001"
+      - "${S3_BIND:-127.0.0.1}:8443:8443"
+      - "${CONSOLE_BIND:-127.0.0.1}:8444:8444"
     volumes:
       - objects:/data
     healthcheck:

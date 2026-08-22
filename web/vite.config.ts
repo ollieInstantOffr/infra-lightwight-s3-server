@@ -22,9 +22,9 @@ export default defineConfig({
     // API calls are proxied. Same-origin in both cases, which keeps the
     // session cookie working without CORS.
     proxy: {
-      "/api": { target: "http://localhost:9001", changeOrigin: true },
-      "/healthz": { target: "http://localhost:9001", changeOrigin: true },
-      "/readyz": { target: "http://localhost:9001", changeOrigin: true },
+      "/api": { target: "http://localhost:8444", changeOrigin: true },
+      "/healthz": { target: "http://localhost:8444", changeOrigin: true },
+      "/readyz": { target: "http://localhost:8444", changeOrigin: true },
     },
   },
 });
