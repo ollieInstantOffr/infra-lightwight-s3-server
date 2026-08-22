@@ -136,6 +136,16 @@ const s3 = new S3Client({
 });
 ```
 
+### Graphical clients
+
+Cyberduck, Transmit, S3 Browser and similar mostly assume virtual-host style
+addressing, and fail in a confusing way against a path-style deployment —
+buckets list, then listing inside one reports a connection error because
+`bucket.s3.example.com` does not resolve.
+
+**[clients/README.md](clients/README.md)** covers them, and ships a Cyberduck
+profile that fixes it in one double-click.
+
 ---
 
 ## What is implemented

@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Cyberduck / Mountain Duck connection profile for Pail.
+
+      Cyberduck's built-in Amazon S3 profile addresses buckets virtual-host
+      style: it requests bucket.s3.example.com rather than
+      s3.example.com/bucket. Against a deployment without a wildcard DNS record
+      and certificate that hostname does not resolve, so buckets list correctly
+      and then listing inside one fails with "the connection attempt was
+      rejected" — which reads as a network fault and is not one.
+
+      This profile is identical except that it forces path style, which every
+      Pail deployment supports with no DNS work.
+
+      Install by double-clicking. The hostname is left configurable, so one
+      profile serves every deployment.
+    -->
+
+    <key>Protocol</key>
+    <string>s3</string>
+
+    <!-- Must be unique; this is how Cyberduck tells profiles apart. -->
+    <key>Vendor</key>
+    <string>pail-s3-path-style</string>
+
+    <key>Description</key>
+    <string>Pail (S3, path style)</string>
+
+    <key>Scheme</key>
+    <string>https</string>
+    <key>Schemes</key>
+    <array>
+        <string>https</string>
+        <string>http</string>
+    </array>
+
+    <key>Default Hostname</key>
+    <string></string>
+    <key>Hostname Configurable</key>
+    <true/>
+
+    <!-- TLS terminates at the reverse proxy on 443, so the port is the scheme
+         default and there is nothing to configure. -->
+    <key>Port</key>
+    <integer>443</integer>
+    <key>Port Configurable</key>
+    <true/>
+
+    <key>Username Configurable</key>
+    <true/>
+    <key>Password Configurable</key>
+    <true/>
+    <key>Username Placeholder</key>
+    <string>Access Key ID</string>
+    <key>Password Placeholder</key>
+    <string>Secret Access Key</string>
+
+    <!-- The setting this profile exists for. -->
+    <key>Properties</key>
+    <array>
+        <string>s3.bucket.virtualhost.disable=true</string>
+    </array>
+
+    <key>Region</key>
+    <string>us-east-1</string>
+    <key>Regions</key>
+    <array>
+        <string>us-east-1</string>
+    </array>
+
+    <!-- Pail has no storage tiers: every object is stored once, on local disk. -->
+    <key>Default Storage Class</key>
+    <string>STANDARD</string>
+</dict>
+</plist>
