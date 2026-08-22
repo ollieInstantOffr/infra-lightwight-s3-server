@@ -1,0 +1,21 @@
+# Local environment
+.env
+
+# Build output
+/bin/
+/dist/
+# Anchored: an unanchored "s3d" would also ignore the cmd/s3d package directory.
+/s3d
+
+# Local data volume
+/data/
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

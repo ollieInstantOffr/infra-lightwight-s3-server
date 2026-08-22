@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+data/
+bin/
+dist/
+web/node_modules
+web/dist
+README.md
+*.md
+.DS_Store
