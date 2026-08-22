@@ -91,3 +91,52 @@ func writeXML(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	_, _ = w.Write([]byte(xml.Header))
 	_, _ = w.Write(body)
 }
+
+// ListBucketResult is the ListObjectsV2 response. It doubles as the v1
+// response: the two differ only in which pagination fields are populated, and
+// omitempty keeps the unused ones out of the document.
+type ListBucketResult struct {
+	XMLName xml.Name `xml:"ListBucketResult"`
+	Xmlns   string   `xml:"xmlns,attr"`
+
+	Name      string `xml:"Name"`
+	Prefix    string `xml:"Prefix"`
+	Delimiter string `xml:"Delimiter,omitempty"`
+	MaxKeys   int    `xml:"MaxKeys"`
+	// KeyCount is objects plus common prefixes, which is what S3 reports and
+	// what clients compare against MaxKeys to decide whether to paginate.
+	KeyCount    int  `xml:"KeyCount"`
+	IsTruncated bool `xml:"IsTruncated"`
+
+	// V2 pagination.
+	ContinuationToken     string `xml:"ContinuationToken,omitempty"`
+	NextContinuationToken string `xml:"NextContinuationToken,omitempty"`
+	StartAfter            string `xml:"StartAfter,omitempty"`
+
+	// V1 pagination. S3 keeps these names for ListObjects, and older tooling
+	// still calls it.
+	Marker     string `xml:"Marker,omitempty"`
+	NextMarker string `xml:"NextMarker,omitempty"`
+
+	EncodingType string `xml:"EncodingType,omitempty"`
+
+	Contents       []ObjectEntry  `xml:"Contents"`
+	CommonPrefixes []CommonPrefix `xml:"CommonPrefixes"`
+}
+
+// ObjectEntry is one object in a listing.
+type ObjectEntry struct {
+	Key          string `xml:"Key"`
+	LastModified string `xml:"LastModified"`
+	ETag         string `xml:"ETag"`
+	Size         int64  `xml:"Size"`
+	// StorageClass is always STANDARD. There are no tiers here, but clients
+	// read the field and some fail on its absence.
+	StorageClass string `xml:"StorageClass"`
+	Owner        *Owner `xml:"Owner,omitempty"`
+}
+
+// CommonPrefix is a folder-like grouping produced by a delimiter.
+type CommonPrefix struct {
+	Prefix string `xml:"Prefix"`
+}

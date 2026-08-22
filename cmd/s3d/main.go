@@ -113,10 +113,11 @@ func run() error {
 	}
 
 	s3Server := &s3api.Server{
-		DB:     pool,
-		Blobs:  blobs,
-		Log:    log,
-		Region: cfg.S3Region,
+		DB:        pool,
+		Blobs:     blobs,
+		Log:       log,
+		Region:    cfg.S3Region,
+		PublicURL: cfg.PublicS3URL,
 		Verifier: &s3api.Verifier{
 			Region:  cfg.S3Region,
 			Proxies: proxies,
@@ -168,6 +169,10 @@ func run() error {
 			},
 		},
 	}
+
+	// Background reclamation runs for the life of the process and stops with
+	// the shutdown signal.
+	go runMaintenance(ctx, pool, blobs, log)
 
 	// serveErr carries the first listener failure. It is buffered so a failing
 	// goroutine never blocks on a shutdown that is already under way.

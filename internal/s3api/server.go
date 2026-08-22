@@ -17,6 +17,10 @@ type Server struct {
 	Verifier *Verifier
 	Log      *slog.Logger
 	Region   string
+	// PublicURL is the address clients reach this server on, which is not the
+	// address it binds to: TLS terminates at the reverse proxy. It appears in
+	// the Location of a completed multipart upload.
+	PublicURL string
 }
 
 // Handler builds the routed, authenticated handler for the S3 listener.
@@ -81,6 +85,31 @@ func (s *Server) routeBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+
+	// Multipart is expressed through query subresources on the object path
+	// rather than through distinct routes, so it is dispatched before the
+	// plain verbs. uploadId identifies an in-progress upload; ?uploads with no
+	// id starts one.
+	uploadID := query.Get("uploadId")
+	switch {
+	case r.Method == http.MethodPost && query.Has("uploads"):
+		s.withBucket(w, r, s.handleCreateMultipartUpload)
+		return
+	case r.Method == http.MethodPut && uploadID != "":
+		s.withUpload(w, r, uploadID, s.handleUploadPart)
+		return
+	case r.Method == http.MethodPost && uploadID != "":
+		s.withUpload(w, r, uploadID, s.handleCompleteMultipartUpload)
+		return
+	case r.Method == http.MethodDelete && uploadID != "":
+		s.withUpload(w, r, uploadID, s.handleAbortMultipartUpload)
+		return
+	case r.Method == http.MethodGet && uploadID != "":
+		s.withUpload(w, r, uploadID, s.handleListParts)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPut:
 		s.handlePutObject(w, r)
@@ -93,6 +122,24 @@ func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.unsupported(w, r)
 	}
+}
+
+// withBucket resolves the request's bucket before calling handler.
+func (s *Server) withBucket(w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request, *db.Bucket)) {
+	bucket, err := s.requireBucket(w, r, bucketOf(r))
+	if err != nil {
+		return
+	}
+	handler(w, r, bucket)
+}
+
+// withUpload resolves the bucket and passes the upload id through.
+func (s *Server) withUpload(w http.ResponseWriter, r *http.Request, uploadID string, handler func(http.ResponseWriter, *http.Request, *db.Bucket, string)) {
+	bucket, err := s.requireBucket(w, r, bucketOf(r))
+	if err != nil {
+		return
+	}
+	handler(w, r, bucket, uploadID)
 }
 
 // unsupported answers anything the router did not match. NotImplemented rather

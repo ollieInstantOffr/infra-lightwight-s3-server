@@ -111,7 +111,8 @@ func (s *Server) handleGetBucket(w http.ResponseWriter, r *http.Request) {
 	name := bucketOf(r)
 	query := r.URL.Query()
 
-	if _, err := s.requireBucket(w, r, name); err != nil {
+	bucket, err := s.requireBucket(w, r, name)
+	if err != nil {
 		return
 	}
 
@@ -123,12 +124,12 @@ func (s *Server) handleGetBucket(w http.ResponseWriter, r *http.Request) {
 			value = ""
 		}
 		writeXML(w, r, http.StatusOK, LocationConstraint{Xmlns: s3Namespace, Value: value})
-		return
+	case query.Has("uploads"):
+		s.handleListMultipartUploads(w, r, bucket)
+	default:
+		// A plain GET on a bucket is a listing, in both v1 and v2 form.
+		s.handleListObjects(w, r, bucket)
 	}
-
-	// Object listing arrives here too, and lands in its own issue.
-	WriteError(w, r, ErrNotImplemented.WithMessage(
-		"Listing objects is not implemented yet (see ILS-8)."))
 }
 
 // handleHeadBucket implements HeadBucket, the existence check.

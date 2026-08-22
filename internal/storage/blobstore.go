@@ -323,3 +323,38 @@ func validateDigest(digest string) error {
 	}
 	return nil
 }
+
+// Concat writes a new blob formed by joining existing blobs in order, and
+// returns it.
+//
+// Multipart completion needs a single addressable blob for the finished object.
+// The parts are streamed through io.MultiReader rather than read into memory,
+// so joining a hundred 100 MiB parts costs the same resident memory as joining
+// two small ones. The parts themselves are untouched; their references are
+// released by the caller once the metadata commits.
+func (s *Store) Concat(ctx context.Context, digests []string) (Blob, error) {
+	if len(digests) == 0 {
+		return s.Put(ctx, strings.NewReader(""))
+	}
+
+	readers := make([]io.Reader, 0, len(digests))
+	// Files are closed only after Put has consumed all of them, so the slice is
+	// tracked separately from the readers.
+	open := make([]*os.File, 0, len(digests))
+	defer func() {
+		for _, f := range open {
+			_ = f.Close()
+		}
+	}()
+
+	for _, digest := range digests {
+		f, err := s.Open(digest)
+		if err != nil {
+			return Blob{}, fmt.Errorf("open part %s: %w", digest, err)
+		}
+		open = append(open, f)
+		readers = append(readers, f)
+	}
+
+	return s.Put(ctx, io.MultiReader(readers...))
+}
