@@ -22,6 +22,7 @@ export function ObjectDrawer({
   versioningOn,
   onClose,
   onShare,
+  onDelete,
   onChanged,
 }: {
   bucket: string;
@@ -29,6 +30,7 @@ export function ObjectDrawer({
   versioningOn: boolean;
   onClose: () => void;
   onShare: () => void;
+  onDelete: () => void;
   onChanged: () => void;
 }) {
   const kind = previewKind(object.contentType);
@@ -70,6 +72,13 @@ export function ObjectDrawer({
           </a>
           <Button onClick={onShare}>Share link</Button>
           <CopyButton text={`s3://${bucket}/${object.key}`}>Copy S3 URI</CopyButton>
+          {/* Separated from the others: it is the one action here that removes
+              something, and it should not sit flush against Download. */}
+          <span className="ml-auto">
+            <Button variant="danger" onClick={onDelete}>
+              Delete
+            </Button>
+          </span>
         </div>
 
         {versioningOn && (

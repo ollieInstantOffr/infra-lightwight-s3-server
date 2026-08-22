@@ -34,10 +34,15 @@ export function ObjectBrowser({
   bucket,
   prefix,
   versioningOn,
+  onMutated,
 }: {
   bucket: string;
   prefix: string;
   versioningOn: boolean;
+  // Anything that adds or removes objects changes the bucket's own totals,
+  // which live in the header above this component. Without telling the parent,
+  // the header keeps claiming "4 objects" after one has been deleted.
+  onMutated: () => void;
 }) {
   const [listing, setListing] = useState<ObjectListing | null>(null);
   const [loading, setLoading] = useState(true);
@@ -115,8 +120,9 @@ export function ObjectBrowser({
       // Failures stay on screen so the message can be read; successes clear.
       setUploads((current) => current.filter((upload) => upload.error));
       await load();
+      onMutated();
     },
-    [bucket, prefix, load],
+    [bucket, prefix, load, onMutated],
   );
 
   async function remove(keys: string[], folderPrefix?: string) {
@@ -124,6 +130,7 @@ export function ObjectBrowser({
       await api.post(`/api/buckets/${encodeURIComponent(bucket)}/objects/delete`,
         folderPrefix ? { prefix: folderPrefix } : { keys });
       await load();
+      onMutated();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not delete.");
     }
@@ -290,6 +297,12 @@ export function ObjectBrowser({
                 Download
               </a>
               <RowAction onClick={() => setSharing(object.key)}>Share</RowAction>
+              {/* On the row, not only behind a checkbox. Folder rows have had a
+                  Delete since the start, and having objects behave differently
+                  made the capability look absent rather than hidden. */}
+              <RowAction danger onClick={() => setConfirming({ keys: [object.key] })}>
+                Delete
+              </RowAction>
             </span>
           </TableRow>
         ))}
@@ -325,6 +338,12 @@ export function ObjectBrowser({
             setSharing(inspecting.key);
             setInspecting(null);
           }}
+          onDelete={() => {
+            // The drawer describes an object that is about to stop existing,
+            // so it closes before the confirmation opens.
+            setConfirming({ keys: [inspecting.key] });
+            setInspecting(null);
+          }}
           onChanged={load}
         />
       )}
@@ -339,13 +358,23 @@ export function ObjectBrowser({
           onCreated={() => {
             setCreatingFolder(false);
             void load();
+            onMutated();
           }}
         />
       )}
 
       {confirming && (
         <Modal
-          title={confirming.prefix ? "Delete folder" : `Delete ${confirming.keys.length} object${confirming.keys.length === 1 ? "" : "s"}`}
+          title={
+            confirming.prefix
+              ? "Delete folder"
+              : confirming.keys.length === 1
+                ? "Delete object"
+                : `Delete ${confirming.keys.length} objects`
+          }
+          subtitle={
+            !confirming.prefix && confirming.keys.length === 1 ? confirming.keys[0] : undefined
+          }
           onClose={() => setConfirming(null)}
         >
           <div className="space-y-[16px]">
@@ -354,6 +383,8 @@ export function ObjectBrowser({
                 <>
                   Everything under <span className="font-mono">{confirming.prefix}</span> will be deleted.
                 </>
+              ) : confirming.keys.length === 1 ? (
+                <>This removes the object.</>
               ) : (
                 <>This removes the selected objects.</>
               )}{" "}

@@ -85,7 +85,12 @@ export function ObjectsPage() {
       />
 
       {tab === "objects" && (
-        <ObjectBrowser bucket={bucket} prefix={prefix} versioningOn={settings?.versioning ?? false} />
+        <ObjectBrowser
+          bucket={bucket}
+          prefix={prefix}
+          versioningOn={settings?.versioning ?? false}
+          onMutated={loadContext}
+        />
       )}
       {tab === "versions" && (
         <BucketVersionsTab
