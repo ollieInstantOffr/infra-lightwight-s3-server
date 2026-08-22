@@ -66,6 +66,11 @@ func (v *Verifier) Verify(ctx context.Context, r *http.Request) (*Identity, erro
 	if IsPresigned(r) {
 		return v.verifyPresigned(ctx, r)
 	}
+	// Named explicitly so a client using the deprecated scheme is told what to
+	// change, rather than being told its request is unsigned.
+	if isSignatureV2(r) {
+		return nil, errSignatureV2
+	}
 
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {

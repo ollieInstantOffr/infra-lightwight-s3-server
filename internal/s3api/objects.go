@@ -190,8 +190,20 @@ func writeObjectHeaders(w http.ResponseWriter, object *db.Object) {
 	w.Header().Set("Content-Type", object.ContentType)
 	w.Header().Set("Last-Modified", formatHTTPTime(object.UpdatedAt))
 	w.Header().Set("Accept-Ranges", "bytes")
-	for name, value := range object.Metadata {
-		w.Header().Set(userMetadataPrefix+name, value)
+	setUserMetadataHeaders(w.Header(), object.Metadata)
+}
+
+// setUserMetadataHeaders writes x-amz-meta-* headers with lowercase names.
+//
+// http.Header.Set canonicalises names, turning "x-amz-meta-author" into
+// "X-Amz-Meta-Author". Real S3 sends them lowercase, and clients index the
+// metadata map by the name as received — so botocore hands the caller "Author"
+// against this server and "author" against S3, and code written for S3 fails
+// with a KeyError. Assigning to the map directly bypasses canonicalisation,
+// since net/http writes non-canonical keys verbatim.
+func setUserMetadataHeaders(header http.Header, metadata map[string]string) {
+	for name, value := range metadata {
+		header[userMetadataPrefix+strings.ToLower(name)] = []string{value}
 	}
 }
 

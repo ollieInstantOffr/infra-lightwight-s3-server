@@ -36,6 +36,34 @@ func IsPresigned(r *http.Request) bool {
 	return r.URL.Query().Get(paramSignature) != ""
 }
 
+// Legacy Signature Version 2 query parameters. This server does not implement
+// SigV2 — AWS deprecated it and it is materially weaker — but botocore still
+// falls back to it when presigning against a custom endpoint unless
+// signature_version is set explicitly.
+//
+// Detecting it is worth the few lines: the alternative is a bare "request is
+// not signed", which sends the reader hunting for a credentials problem that
+// does not exist. The fix is a one-line client change, so the error says so.
+const (
+	paramV2AccessKeyID = "AWSAccessKeyId"
+	paramV2Signature   = "Signature"
+	paramV2Expires     = "Expires"
+)
+
+// isSignatureV2 reports whether a request carries a legacy SigV2 query
+// signature.
+func isSignatureV2(r *http.Request) bool {
+	query := r.URL.Query()
+	return query.Get(paramV2AccessKeyID) != "" && query.Get(paramV2Signature) != ""
+}
+
+// errSignatureV2 explains the fix rather than merely refusing.
+var errSignatureV2 = ErrInvalidArgument.WithMessage(
+	"This request is signed with the deprecated AWS Signature Version 2. " +
+		"This server requires Signature Version 4. " +
+		"In boto3, pass Config(signature_version=\"s3v4\"); " +
+		"in the AWS CLI, set signature_version = s3v4 in your profile.")
+
 // verifyPresigned authenticates a request signed through the query string.
 func (v *Verifier) verifyPresigned(ctx context.Context, r *http.Request) (*Identity, error) {
 	query := r.URL.Query()
