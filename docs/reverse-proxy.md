@@ -15,6 +15,64 @@ They are separate because a bucket can be named anything, including `assets` or
 
 ---
 
+## DNS
+
+Both names are ordinary `A` records pointing at the **public IPv4 address of the
+machine running Nginx Proxy Manager** — not at the container, and not at the
+9000/9001 ports. The proxy is what listens on 443; it is the only thing DNS
+needs to find.
+
+| Type | Name      | Value            |
+| ---- | --------- | ---------------- |
+| A    | `s3`      | `203.0.113.10`   |
+| A    | `console` | `203.0.113.10`   |
+
+Both point at the same address. They are separate names so the proxy can tell
+which one a request is for, not because they live in different places.
+
+A few practical notes:
+
+- **Behind NAT**, use the public address of the router and forward ports 80 and
+  443 to the proxy host. Port 80 is needed even though everything ends up on
+  443, because Let's Encrypt's HTTP-01 challenge uses it.
+- **On IPv6**, add `AAAA` records alongside, with the same names.
+- **If your proxy is reached by hostname** rather than a fixed address — dynamic
+  DNS, a load balancer, a cloud provider's generated name — use `CNAME` records
+  pointing at that hostname instead. Do not use a `CNAME` at the zone apex
+  (`example.com` itself); that is not valid, and most providers offer an "ALIAS"
+  or "ANAME" record for it.
+- **Lower the TTL to 300 seconds before you migrate anything**, and raise it
+  again once you are settled. A 24-hour TTL is a 24-hour outage if you get a
+  record wrong.
+
+### Then set the URLs to match, exactly
+
+```bash
+PUBLIC_S3_URL=https://s3.example.com
+PUBLIC_CONSOLE_URL=https://console.example.com
+```
+
+This is not cosmetic. **SigV4 signs the hostname**, so the value here must be
+byte-identical to what clients put in their endpoint configuration. A trailing
+slash, `http` where the client uses `https`, or `www.` on one side and not the
+other all produce `SignatureDoesNotMatch` on every request — an error that reads
+like a credentials problem and is not.
+
+`./setup.sh --configure` will prompt for both and rewrite `.env` for you.
+
+### Checking DNS before going further
+
+```bash
+dig +short s3.example.com
+dig +short console.example.com
+```
+
+Both should return your proxy's address and nothing else. If they return
+nothing, the record has not propagated yet; if they return a different address,
+something else in the zone is shadowing it.
+
+---
+
 ## The settings that matter
 
 Nginx Proxy Manager's defaults will get you a working console and a **broken S3
