@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -38,10 +37,7 @@ func (r *recordingRemover) count() int {
 
 func testPool(t *testing.T) *Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("TEST_DATABASE_URL not set; skipping database tests")
-	}
+	dsn := testDSN(t, "test_db_pkg")
 	ctx := context.Background()
 	pool, err := Connect(ctx, dsn)
 	if err != nil {
@@ -52,8 +48,11 @@ func testPool(t *testing.T) *Pool {
 	if err := Migrate(ctx, pool, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM blobs`); err != nil {
-		t.Fatalf("reset blobs: %v", err)
+	// Ordered so foreign keys are satisfied: objects reference blobs.
+	for _, stmt := range []string{`DELETE FROM buckets`, `DELETE FROM blobs`} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("reset (%s): %v", stmt, err)
+		}
 	}
 	return pool
 }

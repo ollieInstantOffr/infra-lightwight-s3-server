@@ -21,6 +21,9 @@ import (
 
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/config"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/s3api"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/storage"
 )
 
@@ -36,6 +39,15 @@ const shutdownGrace = 30 * time.Second
 const startupTimeout = 60 * time.Second
 
 func main() {
+	// Credential management runs and exits without starting the listeners.
+	if handled, err := runCredentialCommand(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(); err != nil {
 		// The logger may not exist yet if configuration itself failed, so this
 		// path deliberately writes plainly to stderr.
@@ -91,6 +103,42 @@ func run() error {
 		return fmt.Errorf("migrate database: %w", err)
 	}
 
+	cipher, err := secrets.NewCipher(cfg.CredentialsKey)
+	if err != nil {
+		return fmt.Errorf("credentials key: %w", err)
+	}
+	proxies, err := httpx.NewProxyTrust(cfg.TrustedProxies)
+	if err != nil {
+		return err
+	}
+
+	s3Server := &s3api.Server{
+		DB:     pool,
+		Blobs:  blobs,
+		Log:    log,
+		Region: cfg.S3Region,
+		Verifier: &s3api.Verifier{
+			Region:  cfg.S3Region,
+			Proxies: proxies,
+			// Looked up per request so a revoked credential stops working
+			// immediately rather than at the end of some cache lifetime.
+			Lookup: func(ctx context.Context, accessKeyID string) (string, error) {
+				cred, err := db.LookupCredential(ctx, pool, cipher, accessKeyID)
+				if err != nil {
+					return "", err
+				}
+				// Best-effort, and throttled to once a minute in the query, so
+				// a failure here must not fail an otherwise valid request.
+				if err := db.TouchCredential(ctx, pool, accessKeyID); err != nil {
+					log.Warn("could not record credential use", "access_key_id", accessKeyID, "error", err)
+				}
+				return cred.SecretKey, nil
+			},
+		},
+	}
+
+	warnIfNoCredentials(startupCtx, pool, log)
+
 	// Signal handling is installed before the listeners so a Ctrl-C during
 	// startup is still honoured rather than killing the process outright.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -101,7 +149,7 @@ func run() error {
 			name: "s3",
 			server: &http.Server{
 				Addr:    fmt.Sprintf(":%d", cfg.S3Port),
-				Handler: placeholderHandler("s3", version),
+				Handler: s3Server.Handler(),
 				// No WriteTimeout: object downloads are unbounded in duration
 				// and a write deadline would truncate large transfers.
 				ReadHeaderTimeout: 15 * time.Second,
@@ -177,9 +225,24 @@ func newLogger(cfg *config.Config) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
 }
 
-// placeholderHandler stands in until the S3 API and console routers land in
-// their own issues. It answers health probes so the container is orchestratable
-// from day one, and reports 501 for everything else.
+// warnIfNoCredentials points out a server nobody can actually use. A fresh
+// deployment has no S3 credentials until one is created in the console, and the
+// resulting InvalidAccessKeyId is otherwise a confusing first experience.
+func warnIfNoCredentials(ctx context.Context, pool *db.Pool, log *slog.Logger) {
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM credentials WHERE revoked_at IS NULL`).Scan(&count); err != nil {
+		log.Warn("could not count credentials", "error", err)
+		return
+	}
+	if count == 0 {
+		log.Warn("no S3 credentials exist yet; create one in the console before using the S3 API")
+	}
+}
+
+// placeholderHandler stands in until the console router lands in its own issue.
+// It answers health probes so the container is orchestratable from day one, and
+// reports 501 for everything else.
 func placeholderHandler(listener, version string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
