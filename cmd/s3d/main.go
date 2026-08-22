@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/config"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/console"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/s3api"
@@ -139,6 +140,40 @@ func run() error {
 		},
 	}
 
+	// The bootstrap admin is created or promoted on every start, which is the
+	// documented way back in if the last admin is removed by accident.
+	admin, err := db.EnsureAdmin(startupCtx, pool, cfg.AdminEmail)
+	if err != nil {
+		return err
+	}
+	log.Info("bootstrap admin ready", "email", admin.Email)
+
+	var mailer console.Mailer
+	if cfg.ResendConfigured() {
+		mailer = console.NewResendMailer(cfg.ResendAPIKey, cfg.ResendFrom)
+	} else {
+		// Without a key the sign-in link is logged instead of sent, which keeps
+		// local development usable. In production that is a misconfiguration.
+		mailer = &console.LogMailer{Log: log}
+		if cfg.Env == config.Production {
+			log.Warn("RESEND_API_KEY is not set: sign-in links will be written to this log instead of emailed")
+		}
+	}
+
+	consoleServer := &console.Server{
+		DB:            pool,
+		Blobs:         blobs,
+		Cipher:        cipher,
+		Mailer:        mailer,
+		Proxies:       proxies,
+		Log:           log,
+		PublicURL:     cfg.PublicConsoleURL,
+		PublicS3URL:   cfg.PublicS3URL,
+		Region:        cfg.S3Region,
+		SessionSecret: cfg.SessionSecret,
+		Assets:        consoleAssets(log),
+	}
+
 	warnIfNoCredentials(startupCtx, pool, log)
 
 	// Signal handling is installed before the listeners so a Ctrl-C during
@@ -163,7 +198,7 @@ func run() error {
 			name: "console",
 			server: &http.Server{
 				Addr:              fmt.Sprintf(":%d", cfg.ConsolePort),
-				Handler:           placeholderHandler("console", version),
+				Handler:           consoleServer.Handler(),
 				ReadHeaderTimeout: 15 * time.Second,
 				IdleTimeout:       120 * time.Second,
 				ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
@@ -244,21 +279,4 @@ func warnIfNoCredentials(ctx context.Context, pool *db.Pool, log *slog.Logger) {
 	if count == 0 {
 		log.Warn("no S3 credentials exist yet; create one in the console before using the S3 API")
 	}
-}
-
-// placeholderHandler stands in until the console router lands in its own issue.
-// It answers health probes so the container is orchestratable from day one, and
-// reports 501 for everything else.
-func placeholderHandler(listener, version string) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintln(w, "ok")
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusNotImplemented)
-		fmt.Fprintf(w, "s3d %s: the %s listener is not implemented yet\n", version, listener)
-	})
-	return mux
 }
