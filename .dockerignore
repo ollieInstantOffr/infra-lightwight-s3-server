@@ -1,11 +1,26 @@
+# Everything the image does not need. Keeping this tight matters: the build
+# context is sent to the daemon on every build, and node_modules alone is
+# larger than the finished image.
 .git
 .gitignore
+.github
+*.md
+!README.md
+
 .env
-data/
+.env.*
+!.env.example
+
 bin/
 dist/
-web/node_modules
-web/dist
-README.md
-*.md
+data/
+
+web/node_modules/
+web/dist/
+internal/web/dist/
+
+# Test artefacts and editor noise
+*_test.go
 .DS_Store
+.idea/
+.vscode/

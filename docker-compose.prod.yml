@@ -1,0 +1,37 @@
+# Production overlay:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# It changes three things: the ports bind only to loopback so the reverse proxy
+# is the sole way in, logs are bounded so a busy node cannot fill the disk with
+# JSON, and both services restart always rather than unless-stopped.
+
+services:
+  s3d:
+    restart: always
+    ports:
+      # Loopback only. The reverse proxy connects over it; nothing else can.
+      # Change these to 0.0.0.0 only if the proxy runs on a different host, and
+      # then firewall them.
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          # Generous: the server streams rather than buffering, so memory is
+          # bounded by concurrency rather than by object size. The limit is
+          # here to turn a leak into a restart instead of an OOM-killed host.
+          memory: 1g
+
+  postgres:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,74 @@
+# Development and small-deployment compose file.
+#
+# Postgres is not published to the host: nothing outside this network needs it,
+# and an exposed database is the most common way a small deployment is
+# compromised. Reach it with `docker compose exec postgres psql -U s3d`.
+
+services:
+  s3d:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        # service_healthy, not service_started. Without it the server races the
+        # database on a cold start and fails its first migration, which looks
+        # like a broken image rather than a startup ordering problem.
+        condition: service_healthy
+    environment:
+      ENV: ${ENV:-production}
+      S3_PORT: 9000
+      CONSOLE_PORT: 9001
+      DATA_DIR: /data
+      DATABASE_URL: postgres://s3d:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/s3d?sslmode=disable
+      PUBLIC_S3_URL: ${PUBLIC_S3_URL:?set PUBLIC_S3_URL in .env}
+      PUBLIC_CONSOLE_URL: ${PUBLIC_CONSOLE_URL:?set PUBLIC_CONSOLE_URL in .env}
+      S3_DOMAIN: ${S3_DOMAIN:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:?set CREDENTIALS_KEY in .env}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${S3_BIND:-127.0.0.1}:9000:9000"
+      - "${CONSOLE_BIND:-127.0.0.1}:9001:9001"
+    volumes:
+      - objects:/data
+    healthcheck:
+      # /readyz, not /healthz: readiness checks the database and the data
+      # directory, so a container that is running but cannot serve is reported
+      # unhealthy rather than silently failing every request.
+      test: ["CMD", "/usr/local/bin/s3d", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: s3d
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: s3d
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U s3d -d s3d"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  # Named rather than bind-mounted. Docker seeds a fresh named volume from the
+  # image's own directory, ownership included, so the non-root process can
+  # write to it. A host bind mount would arrive owned by the host user and the
+  # server would fail to create its blob directory.
+  objects:
+  pgdata:

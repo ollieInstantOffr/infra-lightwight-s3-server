@@ -87,6 +87,22 @@ test-db-up: ## Start the Postgres the tests use
 test-db-down: ## Stop the test Postgres
 	-docker rm -f $(TEST_PG_CONTAINER) 2>/dev/null
 
+.PHONY: docker
+docker: ## Build the container image
+	docker build --build-arg VERSION=$(VERSION) -t s3d:$(VERSION) -t s3d:latest .
+
+.PHONY: up
+up: ## Start the stack with docker compose
+	docker compose up -d --build
+
+.PHONY: down
+down: ## Stop the stack
+	docker compose down
+
+.PHONY: logs
+logs: ## Follow the server's logs
+	docker compose logs -f s3d
+
 .PHONY: clean
 clean: ## Remove build output
 	rm -rf bin dist web/dist

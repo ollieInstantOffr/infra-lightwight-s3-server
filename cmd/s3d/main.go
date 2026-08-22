@@ -41,8 +41,14 @@ const shutdownGrace = 30 * time.Second
 const startupTimeout = 60 * time.Second
 
 func main() {
-	// Credential management runs and exits without starting the listeners.
-	if handled, err := runCredentialCommand(os.Args[1:]); handled {
+	// Subcommands run and exit without starting the listeners. Ordered so the
+	// ones that must work on a misconfigured host come first.
+	args := os.Args[1:]
+	if helpCommand(args) || versionCommand(args) || runHealthcheck(args) {
+		return
+	}
+
+	if handled, err := runCredentialCommand(args); handled {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
