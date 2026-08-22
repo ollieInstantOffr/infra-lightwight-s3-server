@@ -19,9 +19,32 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
+.PHONY: web
+web: ## Build the console interface into the Go embed directory
+	cd web && npm ci --silent && npm run build
+	@$(MAKE) --no-print-directory web-keepfile
+
+.PHONY: web-keepfile
+web-keepfile: ## Restore the placeholder the Vite build removes
+	@# Vite empties its output directory, which deletes the tracked .gitkeep
+	@# that lets `go build` work before the frontend has ever been built.
+	@if [ ! -f internal/web/dist/.gitkeep ]; then 		printf '%s\n' \
+			'This directory holds the built console, which the Go binary embeds.' \
+			'' \
+			'It is kept in the repository (empty) because go:embed fails at compile time if' \
+			'its pattern matches nothing — so without this file, `go build` would not work' \
+			'until someone had run the frontend build first.' \
+			'' \
+			'The Vite build empties this directory, so the Makefile and Dockerfile restore' \
+			'this file afterwards.' > internal/web/dist/.gitkeep; \
+	fi
+
 .PHONY: build
-build: ## Build the binary
+build: ## Build the binary (without rebuilding the console)
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/s3d
+
+.PHONY: all
+all: web build ## Build the console and the binary
 
 .PHONY: fmt
 fmt: ## Format all Go source

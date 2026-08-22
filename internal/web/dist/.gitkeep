@@ -1,0 +1,8 @@
+This directory holds the built console, which the Go binary embeds.
+
+It is kept in the repository (empty) because go:embed fails at compile time if
+its pattern matches nothing — so without this file, `go build` would not work
+until someone had run the frontend build first.
+
+The Vite build empties this directory, so the Makefile and Dockerfile restore
+this file afterwards.

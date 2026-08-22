@@ -5,7 +5,11 @@ import { DashboardPage } from "./pages/Dashboard";
 import { BucketsPage } from "./pages/Buckets";
 import { ObjectsPage } from "./pages/Objects";
 import { CredentialsPage } from "./pages/Credentials";
+import { EndpointPage } from "./pages/Endpoint";
 import { UsersPage } from "./pages/Users";
+import { SystemPage } from "./pages/System";
+import { AuditPage_ } from "./pages/Audit";
+import { AccountPage } from "./pages/Account";
 import { useSession } from "./lib/session";
 import { Spinner } from "./components/ui";
 
@@ -22,15 +26,12 @@ export function App() {
   }
 
   if (!user) {
-    // Everything funnels to sign-in, but the intended destination is kept so a
+    // Everything funnels to sign-in, keeping the intended destination so a
     // bookmarked deep link survives the round trip through email.
     return (
       <Routes>
         <Route path="/sign-in" element={<SignInPage />} />
-        <Route
-          path="*"
-          element={<Navigate to="/sign-in" replace state={{ from: location.pathname }} />}
-        />
+        <Route path="*" element={<Navigate to="/sign-in" replace state={{ from: location.pathname }} />} />
       </Routes>
     );
   }
@@ -40,12 +41,17 @@ export function App() {
       <Routes>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/buckets" element={<BucketsPage />} />
-        {/* The bucket's contents live under a wildcard so a prefix with
-            slashes is a real URL, and the browser's back button works through
-            a folder hierarchy. */}
+        {/* The prefix lives under a wildcard so a folder path is a real URL and
+            the back button walks the hierarchy. */}
         <Route path="/buckets/:bucket/*" element={<ObjectsPage />} />
-        <Route path="/credentials" element={user.isAdmin ? <CredentialsPage /> : <Navigate to="/" replace />} />
+        <Route path="/endpoint" element={<EndpointPage />} />
+        <Route path="/system" element={<SystemPage />} />
+        <Route path="/account" element={<AccountPage />} />
+        {/* Admin-only screens redirect rather than 404, since a member
+            following a shared link should land somewhere useful. */}
+        <Route path="/keys" element={user.isAdmin ? <CredentialsPage /> : <Navigate to="/" replace />} />
         <Route path="/users" element={user.isAdmin ? <UsersPage /> : <Navigate to="/" replace />} />
+        <Route path="/audit" element={user.isAdmin ? <AuditPage_ /> : <Navigate to="/" replace />} />
         <Route path="/sign-in" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

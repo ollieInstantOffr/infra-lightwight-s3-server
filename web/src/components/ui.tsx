@@ -53,17 +53,20 @@ export function RowAction({
   onClick,
   danger,
   title,
+  disabled,
 }: {
   children: ReactNode;
   onClick?: () => void;
   danger?: boolean;
   title?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       title={title}
-      className={`rounded-md px-2 py-1 text-[12.5px] font-medium transition-colors ${
+      disabled={disabled}
+      className={`rounded-md px-2 py-1 text-[12.5px] font-medium transition-colors disabled:opacity-50 ${
         danger ? "text-danger hover:bg-danger-soft" : "text-ink-muted hover:bg-inset hover:text-ink"
       }`}
     >

@@ -12,12 +12,15 @@ import {
   Field,
   Modal,
   PageHeader,
-  Spinner,
+  RowAction,
+  SkeletonLine,
+  TableHead,
+  TableRow,
   TextInput,
 } from "../components/ui";
 
-// S3's naming rules, checked as the user types so the error arrives before the
-// request rather than after it. The server validates independently — this is
+// S3's naming rules, checked while typing so the error arrives before the
+// request rather than after it. The server validates independently; this is
 // for the person, not for safety.
 function bucketNameProblem(name: string): string | null {
   if (name === "") return null;
@@ -33,6 +36,8 @@ function bucketNameProblem(name: string): string | null {
   return null;
 }
 
+const columns = "grid-cols-[2.4fr_1fr_.8fr_.8fr_auto]";
+
 export function BucketsPage() {
   const { data, error, loading, reload } = useApi<{ buckets: Bucket[] }>("/api/buckets");
   const [creating, setCreating] = useState(false);
@@ -42,60 +47,61 @@ export function BucketsPage() {
     <>
       <PageHeader
         title="Buckets"
-        description="Each bucket is a separate namespace for objects."
-        actions={<Button onClick={() => setCreating(true)}>New bucket</Button>}
+        subtitle="Each bucket is a separate namespace for objects."
+        actions={
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            New bucket
+          </Button>
+        }
       />
 
-      {loading && <Spinner label="Loading buckets" />}
       {error && <ErrorNotice message={error} onRetry={reload} />}
 
-      {data && data.buckets.length === 0 && (
-        <Card>
+      <Card className="overflow-hidden">
+        <TableHead columns={["Name", "Created", "Objects", "Size", ""]} className={columns} />
+
+        {loading &&
+          Array.from({ length: 4 }, (_, index) => (
+            <div key={index} className={`grid ${columns} gap-[10px] border-b border-line-row px-[18px] py-[13px]`}>
+              <SkeletonLine width="55%" />
+              <SkeletonLine width={70} faint />
+              <SkeletonLine width={40} faint />
+              <SkeletonLine width={52} faint />
+              <span />
+            </div>
+          ))}
+
+        {data?.buckets.map((bucket) => (
+          <TableRow key={bucket.name} className={columns}>
+            <Link
+              to={`/buckets/${encodeURIComponent(bucket.name)}`}
+              className="truncate font-mono text-[12.5px] font-medium underline-offset-2 hover:underline"
+            >
+              {bucket.name}
+            </Link>
+            <span className="text-[12.5px] text-ink-muted">{formatDate(bucket.createdAt)}</span>
+            <span className="tabular-nums text-ink-muted">{bucket.objectCount.toLocaleString()}</span>
+            <span className="tabular-nums text-ink-muted">{formatBytes(bucket.totalBytes)}</span>
+            <span className="text-right">
+              <RowAction danger onClick={() => setDeleting(bucket)}>
+                Delete
+              </RowAction>
+            </span>
+          </TableRow>
+        ))}
+
+        {data && data.buckets.length === 0 && (
           <EmptyState
             title="No buckets yet"
             hint="A bucket holds objects. Create one to start uploading."
-            action={<Button onClick={() => setCreating(true)}>New bucket</Button>}
+            action={
+              <Button variant="primary" onClick={() => setCreating(true)}>
+                New bucket
+              </Button>
+            }
           />
-        </Card>
-      )}
-
-      {data && data.buckets.length > 0 && (
-        <Card className="overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="border-b border-border text-left text-ink-muted">
-              <tr>
-                <th className="px-4 py-2 font-medium">Name</th>
-                <th className="px-4 py-2 text-right font-medium">Objects</th>
-                <th className="px-4 py-2 text-right font-medium">Size</th>
-                <th className="px-4 py-2 font-medium">Created</th>
-                <th className="px-4 py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {data.buckets.map((bucket) => (
-                <tr key={bucket.name} className="border-b border-border last:border-0">
-                  <td className="px-4 py-2">
-                    <Link
-                      to={`/buckets/${encodeURIComponent(bucket.name)}`}
-                      className="font-medium underline-offset-2 hover:underline"
-                    >
-                      {bucket.name}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2 text-right tabular-nums">{bucket.objectCount.toLocaleString()}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{formatBytes(bucket.totalBytes)}</td>
-                  <td className="px-4 py-2 text-ink-muted">{formatDate(bucket.createdAt)}</td>
-                  <td className="px-4 py-2 text-right">
-                    <Button variant="ghost" onClick={() => setDeleting(bucket)}>
-                      Delete
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
+        )}
+      </Card>
 
       {creating && (
         <CreateBucketModal
@@ -143,21 +149,23 @@ function CreateBucketModal({ onClose, onCreated }: { onClose: () => void; onCrea
   }
 
   return (
-    <Modal title="New bucket" onClose={onClose}>
-      <form className="space-y-4" onSubmit={submit}>
+    <Modal
+      title="Create a bucket"
+      subtitle="Names follow S3's rules, so a bucket made here works against real S3 too."
+      onClose={onClose}
+    >
+      <form className="space-y-[16px]" onSubmit={submit}>
         <Field
           label="Name"
           hint="Lowercase letters, numbers, hyphens and dots. This cannot be changed later."
+          error={problem}
         >
-          <TextInput value={name} onChange={setName} placeholder="my-bucket" autoFocus required />
+          <TextInput value={name} onChange={setName} placeholder="my-bucket" autoFocus required mono />
         </Field>
-        {problem && <p className="text-sm text-danger">{problem}</p>}
         {error && <ErrorNotice message={error} />}
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={saving || name === "" || problem !== null}>
+        <div className="flex justify-end gap-[8px]">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" disabled={saving || name === "" || problem !== null}>
             {saving ? "Creating…" : "Create bucket"}
           </Button>
         </div>
@@ -186,11 +194,7 @@ function DeleteBucketModal({
       await api.delete(`/api/buckets/${encodeURIComponent(bucket.name)}`);
       onDeleted();
     } catch (caught) {
-      // A non-empty bucket is the common case here, and the server's message
-      // already says so — passing it through is better than inventing one.
-      setError(
-        caught instanceof ApiError ? caught.message : "Could not delete the bucket.",
-      );
+      setError(caught instanceof ApiError ? caught.message : "Could not delete the bucket.");
     } finally {
       setDeleting(false);
     }
@@ -198,26 +202,22 @@ function DeleteBucketModal({
 
   return (
     <Modal title={`Delete ${bucket.name}`} onClose={onClose}>
-      <div className="space-y-4">
-        <p className="text-sm">
+      <div className="space-y-[16px]">
+        <p className="m-0 text-[13px] leading-[1.6]">
           {bucket.objectCount > 0 ? (
             <>
               This bucket holds{" "}
-              <span className="font-medium">{bucket.objectCount.toLocaleString()} objects</span>. Empty it
-              before deleting.
+              <span className="font-semibold">{bucket.objectCount.toLocaleString()} objects</span> (
+              {formatBytes(bucket.totalBytes)}). Empty it before deleting.
             </>
           ) : (
             <>This bucket is empty. Deleting it cannot be undone.</>
           )}
         </p>
-        {/* Typing the name is a deliberate act; a plain "are you sure" gets
-            clicked through without reading. */}
         <ConfirmByName name={bucket.name} typed={typed} onTyped={setTyped} />
         {error && <ErrorNotice message={error} />}
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
+        <div className="flex justify-end gap-[8px]">
+          <Button onClick={onClose}>Cancel</Button>
           <Button variant="danger" onClick={remove} disabled={deleting || typed !== bucket.name}>
             {deleting ? "Deleting…" : "Delete bucket"}
           </Button>

@@ -19,3 +19,9 @@ web/dist/
 *.swp
 .idea/
 .vscode/
+
+# Built console assets. Produced by the Vite build and embedded at compile
+# time; the directory itself is tracked (with .gitkeep) because go:embed needs
+# it to exist for the Go build to work without a frontend build first.
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep

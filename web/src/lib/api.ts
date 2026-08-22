@@ -154,6 +154,123 @@ export type Dashboard = {
   durabilityNote: string;
 };
 
+export type Traffic = {
+  requests24h: number;
+  clientErrors: number;
+  serverErrors: number;
+  errorRate: number;
+  bytesIn24h: number;
+  bytesOut24h: number;
+  daily: { day: string; requests: number; errors: number }[];
+};
+
+export type SystemStatus = {
+  node: {
+    name: string;
+    version: string;
+    go: string;
+    environment: string;
+    startedAt: string;
+    uptime: number;
+  };
+  storage: { dataDir: string; diskTotal: number; diskFree: number; readable: boolean; singleCopy: boolean };
+  database: {
+    reachable: boolean;
+    connections: number;
+    idleConnections: number;
+    maxConnections: number;
+    acquiredConns: number;
+  };
+  endpoints: { s3: string; console: string; region: string; s3Domain: string; virtualHostStyle: boolean };
+  config: { resendConfigured: boolean; trustedProxyCount: number };
+  counts: { users: number; credentials: number; activeCredentials: number };
+  warnings: { area: string; message: string }[];
+};
+
+export type AuditEvent = {
+  id: number;
+  actor: string;
+  action: string;
+  subjectType: string;
+  subject: string;
+  detail: Record<string, unknown> | null;
+  ip: string | null;
+  userAgent: string | null;
+  createdAt: string;
+};
+
+export type AuditPage = {
+  events: AuditEvent[];
+  actors: string[];
+  actions: { value: string; label: string }[];
+  nextBefore: number | null;
+};
+
+export type Session = {
+  id: string;
+  device: string;
+  userAgent: string | null;
+  ip: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  current: boolean;
+};
+
+export type CorsRule = {
+  allowedOrigins: string[];
+  allowedMethods: string[];
+  allowedHeaders: string[];
+  exposeHeaders?: string[];
+  maxAgeSeconds?: number;
+};
+
+export type LifecycleRule = {
+  id: string;
+  prefix: string;
+  expireDays: number;
+  enabled: boolean;
+};
+
+export type BucketSettings = {
+  bucket: string;
+  publicRead: boolean;
+  versioning: boolean;
+  corsRules: CorsRule[];
+  lifecycleRules: LifecycleRule[];
+  updatedAt: string;
+  versionedBytes: number;
+  versionCount: number;
+  publicReadWarning: string;
+};
+
+export type ObjectVersion = {
+  versionId: string;
+  key: string;
+  size: number;
+  etag: string;
+  contentType: string;
+  isDeleteMarker: boolean;
+  createdAt: string;
+  createdBy: string;
+  isCurrent: boolean;
+};
+
+export type SearchResults = {
+  hits: { bucket: string; key: string; size: number; contentType: string; lastModified: string }[];
+  truncated: boolean;
+  byPrefix: boolean;
+};
+
+export type SetupState = {
+  configured: boolean;
+  adminEmail: string;
+  emailConfigured: boolean;
+  hasCredentials: boolean;
+  consoleURL: string;
+  s3URL: string;
+};
+
 // ─── Uploads ─────────────────────────────────────────────────────────────────
 
 /**
