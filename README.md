@@ -201,14 +201,13 @@ It binds the ports to loopback only, bounds the logs, and restarts always.
 
 ## Running more than one node
 
-Pail is a single-node server. Most of it is already cluster-safe — all
-coordination goes through Postgres — but object bytes live on local disk, so a
-second node cannot read the first one's objects.
+Pail is a single-node server today.
 
-**[docs/scale-out.md](docs/scale-out.md)** scopes what it would take, including
-the fork between mounting shared storage (about a day) and building real
-sharded placement with replication (about sixty points of work), and the
-decisions that have to be made before either.
+**[docs/scale-out.md](docs/scale-out.md)** scopes turning it into a distributed
+one: replication and erasure coding chosen per bucket, one node to unbounded,
+across multiple datacentres, with no single point of failure. It is roughly the
+size of everything built so far, and the document says so plainly — along with
+the observation that MinIO already does almost exactly that list.
 
 ---
 
