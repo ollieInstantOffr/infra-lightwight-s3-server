@@ -73,7 +73,7 @@ func runCredentialCommand(args []string) (handled bool, err error) {
 }
 
 func createCredential(ctx context.Context, pool *db.Pool, cipher *secrets.Cipher, note string) error {
-	cred, err := db.CreateCredential(ctx, pool, cipher, note, nil)
+	cred, err := db.CreateCredential(ctx, pool, cipher, note, nil, db.UnrestrictedGrant())
 	if err != nil {
 		return err
 	}

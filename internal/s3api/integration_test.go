@@ -56,7 +56,7 @@ func newIntegrationServer(t *testing.T) (*s3.Client, *db.Pool) {
 	if err != nil {
 		t.Fatalf("NewCipher: %v", err)
 	}
-	cred, err := db.CreateCredential(ctx, pool, cipher, "integration test", nil)
+	cred, err := db.CreateCredential(ctx, pool, cipher, "integration test", nil, db.UnrestrictedGrant())
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}
@@ -143,7 +143,7 @@ func newVirtualHostServer(t *testing.T, s3Domain string) *virtualHostServer {
 	if err != nil {
 		t.Fatalf("NewCipher: %v", err)
 	}
-	cred, err := db.CreateCredential(ctx, pool, cipher, "vhost test", nil)
+	cred, err := db.CreateCredential(ctx, pool, cipher, "vhost test", nil, db.UnrestrictedGrant())
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}

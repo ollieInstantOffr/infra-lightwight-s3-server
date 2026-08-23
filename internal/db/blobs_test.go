@@ -50,7 +50,7 @@ func testPool(t *testing.T) *Pool {
 	}
 	// Ordered so foreign keys are satisfied: objects reference blobs.
 	for _, stmt := range []string{
-		`DELETE FROM buckets`, `DELETE FROM blobs`,
+		`DELETE FROM buckets`, `DELETE FROM blobs`, `DELETE FROM credentials`,
 		`DELETE FROM request_logs`, `DELETE FROM server_events`,
 		`DELETE FROM alerts`, `DELETE FROM alert_rules`,
 	} {

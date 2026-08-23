@@ -106,7 +106,7 @@ func startExternalServer(t *testing.T, schema string) *externalEndpoint {
 	if err != nil {
 		t.Fatalf("NewCipher: %v", err)
 	}
-	cred, err := db.CreateCredential(ctx, pool, cipher, "external client test", nil)
+	cred, err := db.CreateCredential(ctx, pool, cipher, "external client test", nil, db.UnrestrictedGrant())
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}

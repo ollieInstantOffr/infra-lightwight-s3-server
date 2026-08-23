@@ -47,7 +47,7 @@ func (s *Server) handleCreateCredential(w http.ResponseWriter, r *http.Request) 
 	}
 
 	owner, _ := UserFrom(r.Context())
-	credential, err := db.CreateCredential(r.Context(), s.DB, s.Cipher, request.Description, &owner.ID)
+	credential, err := db.CreateCredential(r.Context(), s.DB, s.Cipher, request.Description, &owner.ID, db.UnrestrictedGrant())
 	if err != nil {
 		s.internalError(w, r, "create credential", err)
 		return
