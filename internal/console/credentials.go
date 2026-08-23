@@ -43,6 +43,12 @@ type createCredentialRequest struct {
 type scopePayload struct {
 	Unrestricted bool               `json:"unrestricted"`
 	Rules        []scopeRulePayload `json:"rules"`
+	// Summary is rendered by the server and sent down with every scope. It is
+	// accepted coming back up and ignored, because a client that edits the
+	// object it was given and sends the whole thing back is doing the normal
+	// thing — and decodeJSON rejects unknown fields, so leaving this out turned
+	// every create and every scope change into a 400.
+	Summary string `json:"summary"`
 }
 
 type scopeRulePayload struct {
