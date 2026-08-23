@@ -184,3 +184,29 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		"byPrefix":  result.ScannedAsPrefix,
 	})
 }
+
+// handleVersion reports what is running, without needing a session.
+//
+// Unauthenticated deliberately, and it is the only thing here that is. The
+// question it answers — did my rollout land, and on what — is asked by
+// deployment tooling that holds no session, and the answer is a number that
+// appears in the repository, the image tag and the release notes. Guarding it
+// would inconvenience the people who need it and inconvenience nobody else.
+//
+// The schema versions come with it because the interesting failure is a
+// mismatch: a build that will not start says the database is ahead of it, and
+// this is where someone checks that claim from outside the container.
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	payload := map[string]any{"version": s.System.Version}
+
+	if build, err := db.SchemaVersion(); err == nil {
+		payload["schemaVersion"] = build
+	}
+	ctx, cancel := contextWithTimeout(r, 3*time.Second)
+	defer cancel()
+	if applied, err := db.AppliedSchemaVersion(ctx, s.DB); err == nil {
+		payload["appliedSchemaVersion"] = applied
+	}
+
+	writeJSON(w, http.StatusOK, payload)
+}

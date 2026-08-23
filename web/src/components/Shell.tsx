@@ -4,6 +4,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useSession } from "../lib/session";
 import { useApi } from "../lib/useApi";
 import { ALERTS_CHANGED, api } from "../lib/api";
+import type { VersionInfo } from "../lib/api";
 import { Logo } from "./Logo";
 import type { AlertPage, Dashboard } from "../lib/api";
 import { formatBytes } from "../lib/format";
@@ -111,9 +112,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <div className="flex items-center gap-[9px] px-[6px]">
           <Logo size={26} className="flex-none" />
           <span className="text-[14px] font-semibold tracking-[-0.01em]">Pail</span>
-          <span className="ml-auto rounded-[6px] border border-line bg-well px-[6px] py-[3px] font-mono text-[9.5px] font-medium text-ink-muted">
-            {dashboard ? "on" : "…"}
-          </span>
+          <VersionPill connected={Boolean(dashboard)} />
         </div>
 
         <nav className="flex flex-col gap-[2px]" aria-label="Main">
@@ -221,4 +220,65 @@ function initials(email: string): string {
   const parts = name.split(/[.\-_]/).filter(Boolean);
   if (parts.length >= 2) return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
   return name.slice(0, 2).toUpperCase() || "?";
+}
+
+/**
+ * The build, in the slot the design reserves for it.
+ *
+ * The version comes from the server rather than being compiled in. The build
+ * stamps it into the binary from the git tag, and a second copy baked into this
+ * bundle would eventually disagree with the binary it shipped beside — a
+ * version that is wrong is worse than none, because it is believed.
+ *
+ * It doubles as the connection indicator it replaces. Losing that signal to
+ * gain this one would be a poor trade, so a console that cannot reach the
+ * server says so here instead of showing a version it can no longer vouch for.
+ */
+function VersionPill({ connected }: { connected: boolean }) {
+  const [info, setInfo] = useState<VersionInfo | null>(null);
+
+  useEffect(() => {
+    // Unauthenticated, and fetched once: the version cannot change without the
+    // process restarting, which reloads the console anyway.
+    api
+      .get<VersionInfo>("/api/version")
+      .then(setInfo)
+      .catch(() => setInfo(null));
+  }, []);
+
+  const label = !connected ? "offline" : info ? displayVersion(info.version) : "…";
+  const tone = !connected ? "border-danger/30 bg-danger-soft text-danger" : "border-line bg-well text-ink-muted";
+
+  return (
+    <span
+      className={`ml-auto rounded-[6px] border px-[6px] py-[3px] font-mono text-[9.5px] font-medium ${tone}`}
+      title={versionTitle(info, connected)}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** A released build shows as v1.2.3; anything else shows as it is. */
+function displayVersion(version: string): string {
+  if (!version || version === "dev") return "dev";
+  return version.startsWith("v") ? version : `v${version}`;
+}
+
+function versionTitle(info: VersionInfo | null, connected: boolean): string {
+  if (!connected) return "The console cannot reach the server.";
+  if (!info) return "Checking which version is running…";
+  const parts = [`Version ${displayVersion(info.version)}`];
+  if (info.appliedSchemaVersion !== undefined) {
+    parts.push(`database schema ${info.appliedSchemaVersion}`);
+  }
+  // Worth surfacing: it is the state the migration guard refuses to start on.
+  if (
+    info.schemaVersion !== undefined &&
+    info.appliedSchemaVersion !== undefined &&
+    info.appliedSchemaVersion > info.schemaVersion
+  ) {
+    parts.push("the database is newer than this build");
+  }
+  return parts.join(" · ");
 }

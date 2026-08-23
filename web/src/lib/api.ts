@@ -118,6 +118,13 @@ export type ObjectListing = {
   nextAfter: string;
 };
 
+/** What build is running, and whether its schema matches the database's. */
+export type VersionInfo = {
+  version: string;
+  schemaVersion?: number;
+  appliedSchemaVersion?: number;
+};
+
 export type Permission = "read" | "write" | "delete";
 
 export type ScopeRule = {

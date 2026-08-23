@@ -254,6 +254,18 @@ stored S3 secret is undecryptable and all access keys have to be reissued.
 
 ---
 
+## Versions
+
+Pail follows semantic versioning. [CHANGELOG.md](CHANGELOG.md) says what changed
+in each release, and [docs/releasing.md](docs/releasing.md) covers how one is
+cut — including the schema compatibility rule, which is the part that decides
+whether a bad release can be rolled back by redeploying the previous image.
+
+The running version is in the console sidebar, and at `/api/version` for
+anything checking a rollout from outside.
+
+---
+
 ## Monitoring
 
 Prometheus metrics are at `/metrics` on the console port: request and error

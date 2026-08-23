@@ -72,6 +72,25 @@ func Migrate(ctx context.Context, pool *Pool, log *slog.Logger) error {
 		return err
 	}
 
+	// A schema newer than this binary understands means an older version has
+	// been deployed over a newer one — a rollback, usually, after a bad
+	// release. Carrying on is the dangerous option: the old code would read
+	// columns that have moved and write rows that no longer satisfy the
+	// constraints, and the damage would look like a hundred unrelated bugs.
+	//
+	// Migrations are forward-only, so there is nothing to undo automatically.
+	// Refusing to start says what happened, while the alternative is silent
+	// corruption of the one thing this server exists to keep.
+	newest := migrations[len(migrations)-1].version
+	if ahead := schemaAhead(applied, newest); ahead > 0 {
+		return fmt.Errorf(
+			"the database schema is at version %d but this build only understands %d: "+
+				"a newer version of Pail has run against this database. "+
+				"Deploy that version or newer — migrations are forward-only, "+
+				"so going back means restoring the database from a backup taken before the upgrade",
+			ahead, newest)
+	}
+
 	pending := 0
 	for _, m := range migrations {
 		if prior, ok := applied[m.version]; ok {
@@ -100,6 +119,42 @@ func Migrate(ctx context.Context, pool *Pool, log *slog.Logger) error {
 		log.Info("database migrated", "applied", pending, "version", migrations[len(migrations)-1].version)
 	}
 	return nil
+}
+
+// schemaAhead returns the highest applied version this build does not know
+// about, or zero when the database is at or behind the build.
+func schemaAhead(applied map[int][]byte, newest int) int {
+	highest := 0
+	for version := range applied {
+		if version > newest && version > highest {
+			highest = version
+		}
+	}
+	return highest
+}
+
+// SchemaVersion returns the highest migration this build carries, for the
+// console's system screen and for anyone diagnosing an upgrade.
+func SchemaVersion() (int, error) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		return 0, err
+	}
+	if len(migrations) == 0 {
+		return 0, nil
+	}
+	return migrations[len(migrations)-1].version, nil
+}
+
+// AppliedSchemaVersion returns the highest migration the database has applied.
+func AppliedSchemaVersion(ctx context.Context, q Querier) (int, error) {
+	var version int
+	err := q.QueryRow(ctx,
+		`SELECT coalesce(max(version), 0) FROM schema_migrations`).Scan(&version)
+	if err != nil {
+		return 0, fmt.Errorf("read schema version: %w", err)
+	}
+	return version, nil
 }
 
 // applyMigration runs one migration and records it in the same transaction, so

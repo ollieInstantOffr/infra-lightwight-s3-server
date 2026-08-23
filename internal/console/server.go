@@ -82,6 +82,9 @@ func (s *Server) Handler() http.Handler {
 	// Health probes are unauthenticated so an orchestrator can reach them.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	// Which build is this. Unauthenticated for the same reason as the health
+	// probes: it is asked by tooling that holds no session.
+	mux.HandleFunc("GET /api/version", s.handleVersion)
 
 	// Metrics. Routed through the optional-session wrapper rather than
 	// requireSession, because the handler accepts either a scraper's bearer
