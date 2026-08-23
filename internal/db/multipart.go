@@ -225,47 +225,38 @@ func CompleteMultipartUpload(ctx context.Context, pool *Pool, upload *MultipartU
 		return fmt.Errorf("lock object key: %w", err)
 	}
 
-	var previous Object
-	err = tx.QueryRow(ctx, `
-		SELECT blob_digest, size, etag, content_type, metadata
-		FROM objects WHERE bucket_id = $1 AND key = $2`,
-		object.BucketID, object.Key).Scan(&previous.BlobDigest, &previous.Size, &previous.ETag,
-		&previous.ContentType, &previousMetadataHolder{&previous})
-	hadPrevious := err == nil
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("read existing object: %w", err)
+	previous, err := readCurrent(ctx, tx, object.BucketID, object.Key)
+	if err != nil {
+		return err
 	}
+	previous.BucketID, previous.Key = object.BucketID, object.Key
+	hadPrevious := previous.Exists
 
 	if err := RetainBlob(ctx, tx, object.BlobDigest, object.Size); err != nil {
 		return err
 	}
 
-	// A multipart completion replaces the key just as a plain PUT does, so it
-	// preserves the superseded state the same way.
-	if opts.Versioning && hadPrevious {
-		superseded := &ObjectVersion{
-			BucketID: object.BucketID, Key: object.Key, BlobDigest: &previous.BlobDigest,
-			Size: previous.Size, ETag: previous.ETag, ContentType: previous.ContentType,
-			Metadata: previous.Metadata, CreatedBy: opts.Actor,
-		}
-		if err := RecordVersion(ctx, tx, superseded); err != nil {
-			return err
-		}
+	// A multipart completion replaces the key just as a plain PUT does, and
+	// goes through the same rules so the two cannot diverge.
+	object.VersionID, err = supersede(ctx, tx, previous, opts)
+	if err != nil {
+		return err
 	}
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO objects (bucket_id, key, blob_digest, size, etag, content_type, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO objects (bucket_id, key, blob_digest, size, etag, content_type, metadata, version_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (bucket_id, key) DO UPDATE SET
 			blob_digest  = EXCLUDED.blob_digest,
 			size         = EXCLUDED.size,
 			etag         = EXCLUDED.etag,
 			content_type = EXCLUDED.content_type,
 			metadata     = EXCLUDED.metadata,
+			version_id   = EXCLUDED.version_id,
 			updated_at   = now()
 		RETURNING id::text, created_at, updated_at`,
 		object.BucketID, object.Key, object.BlobDigest, object.Size,
-		object.ETag, object.ContentType, metadata,
+		object.ETag, object.ContentType, metadata, object.VersionID,
 	).Scan(&object.ID, &object.CreatedAt, &object.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("write completed object: %w", err)

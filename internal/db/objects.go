@@ -25,8 +25,12 @@ type Object struct {
 	ETag        string
 	ContentType string
 	Metadata    map[string]string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// VersionID identifies this state for as long as it exists, including after
+	// it stops being current. Empty means the null version: the object was
+	// written while its bucket was not versioned, and S3 reports it as "null".
+	VersionID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // objectLockID derives an advisory-lock key for one object key within a bucket.
@@ -47,10 +51,10 @@ func objectLockID(bucketID, key string) int64 {
 
 // WriteOptions carries the per-bucket behaviour a write depends on.
 type WriteOptions struct {
-	// Versioning keeps the previous state as history rather than discarding
+	// Versioning keeps the superseded state as history rather than discarding
 	// it. The old blob then stays referenced by its version, so the space is
 	// not reclaimed until the versions are purged.
-	Versioning bool
+	Versioning VersioningState
 	// Actor is recorded on the version, so history says who changed what.
 	Actor string
 }
@@ -79,47 +83,39 @@ func PutObject(ctx context.Context, pool *Pool, obj *Object, opts WriteOptions) 
 	}
 
 	// Under the lock, whatever the key points at now is stable.
-	var previous Object
-	err = tx.QueryRow(ctx, `
-		SELECT blob_digest, size, etag, content_type, metadata
-		FROM objects WHERE bucket_id = $1 AND key = $2`,
-		obj.BucketID, obj.Key).Scan(&previous.BlobDigest, &previous.Size, &previous.ETag,
-		&previous.ContentType, &previousMetadataHolder{&previous})
-	hadPrevious := err == nil
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("read existing object: %w", err)
+	previous, err := readCurrent(ctx, tx, obj.BucketID, obj.Key)
+	if err != nil {
+		return err
 	}
+	previous.BucketID, previous.Key = obj.BucketID, obj.Key
+	hadPrevious := previous.Exists
 
 	if err := RetainBlob(ctx, tx, obj.BlobDigest, obj.Size); err != nil {
 		return err
 	}
 
-	// With versioning on, the state being replaced is preserved as a version,
-	// which takes its own reference to the old blob before the live one is
-	// released below.
-	if opts.Versioning && hadPrevious {
-		superseded := &ObjectVersion{
-			BucketID: obj.BucketID, Key: obj.Key, BlobDigest: &previous.BlobDigest,
-			Size: previous.Size, ETag: previous.ETag, ContentType: previous.ContentType,
-			Metadata: previous.Metadata, CreatedBy: opts.Actor,
-		}
-		if err := RecordVersion(ctx, tx, superseded); err != nil {
-			return err
-		}
+	// The state being replaced is preserved as a version where the bucket's
+	// versioning calls for it, taking its own reference to the old blob before
+	// the live one is released below.
+	obj.VersionID, err = supersede(ctx, tx, previous, opts)
+	if err != nil {
+		return err
 	}
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO objects (bucket_id, key, blob_digest, size, etag, content_type, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO objects (bucket_id, key, blob_digest, size, etag, content_type, metadata, version_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (bucket_id, key) DO UPDATE SET
 			blob_digest  = EXCLUDED.blob_digest,
 			size         = EXCLUDED.size,
 			etag         = EXCLUDED.etag,
 			content_type = EXCLUDED.content_type,
 			metadata     = EXCLUDED.metadata,
+			version_id   = EXCLUDED.version_id,
 			updated_at   = now()
 		RETURNING id::text, created_at, updated_at`,
 		obj.BucketID, obj.Key, obj.BlobDigest, obj.Size, obj.ETag, obj.ContentType, metadata,
+		obj.VersionID,
 	).Scan(&obj.ID, &obj.CreatedAt, &obj.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("write object %q: %w", obj.Key, err)
@@ -146,11 +142,12 @@ func GetObject(ctx context.Context, q Querier, bucketID, key string) (*Object, e
 	var metadata []byte
 
 	err := q.QueryRow(ctx, `
-		SELECT id::text, blob_digest, size, etag, content_type, metadata, created_at, updated_at
+		SELECT id::text, blob_digest, size, etag, content_type, metadata,
+		       version_id, created_at, updated_at
 		FROM objects WHERE bucket_id = $1 AND key = $2`,
 		bucketID, key,
 	).Scan(&obj.ID, &obj.BlobDigest, &obj.Size, &obj.ETag, &obj.ContentType,
-		&metadata, &obj.CreatedAt, &obj.UpdatedAt)
+		&metadata, &obj.VersionID, &obj.CreatedAt, &obj.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrObjectNotFound
 	}
@@ -166,62 +163,105 @@ func GetObject(ctx context.Context, q Querier, bucketID, key string) (*Object, e
 	return obj, nil
 }
 
-// DeleteObject removes an object and releases its blob reference.
+// Deletion is what a delete reports back, because on a versioned bucket a
+// delete is a write and the client needs to know what it wrote.
+type Deletion struct {
+	// Deleted is false only when the key did not exist on an unversioned
+	// bucket. It is not an error either way: S3 makes DELETE idempotent and
+	// clients rely on that when cleaning up.
+	Deleted bool
+	// MarkerVersionID identifies the delete marker, when one was created.
+	// Clients read it from x-amz-version-id and use it to undo the delete.
+	MarkerVersionID string
+	// DeleteMarker says a marker was written rather than data removed, which
+	// the client is told through x-amz-delete-marker.
+	DeleteMarker bool
+}
+
+// DeleteObject removes an object, or marks it deleted on a versioned bucket.
 //
-// Deleting a key that does not exist is not an error: S3 makes DELETE
-// idempotent, and clients rely on that when cleaning up.
-func DeleteObject(ctx context.Context, pool *Pool, bucketID, key string, opts WriteOptions) (deleted bool, err error) {
+// On an unversioned bucket this releases the blob and the space comes back. On
+// a versioned one nothing is removed at all: the state that was current is
+// preserved and a delete marker becomes current, so a plain GET returns 404
+// while the bytes are still there, and deleting the marker by its own id brings
+// the object back. That last behaviour has no counterpart in a plain delete and
+// is the whole reason versioned deletes are worth having.
+func DeleteObject(ctx context.Context, pool *Pool, bucketID, key string, opts WriteOptions) (Deletion, error) {
+	var result Deletion
+
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return false, fmt.Errorf("begin delete object: %w", err)
+		return result, fmt.Errorf("begin delete object: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`,
 		objectLockID(bucketID, key)); err != nil {
-		return false, fmt.Errorf("lock object key: %w", err)
+		return result, fmt.Errorf("lock object key: %w", err)
 	}
 
-	var removed Object
-	err = tx.QueryRow(ctx, `
-		DELETE FROM objects WHERE bucket_id = $1 AND key = $2
-		RETURNING blob_digest, size, etag, content_type, metadata`,
-		bucketID, key).Scan(&removed.BlobDigest, &removed.Size, &removed.ETag,
-		&removed.ContentType, &previousMetadataHolder{&removed})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, tx.Commit(ctx)
-	}
+	removed, err := readCurrent(ctx, tx, bucketID, key)
 	if err != nil {
-		return false, fmt.Errorf("delete object %q: %w", key, err)
+		return result, err
 	}
+	removed.BucketID, removed.Key = bucketID, key
 
-	if opts.Versioning {
-		// The deleted state is kept as a version, and a delete marker records
-		// that the key was removed at this point. The bytes stay referenced by
-		// the version, so the space is not reclaimed until it is purged.
-		superseded := &ObjectVersion{
-			BucketID: bucketID, Key: key, BlobDigest: &removed.BlobDigest,
-			Size: removed.Size, ETag: removed.ETag, ContentType: removed.ContentType,
-			Metadata: removed.Metadata, CreatedBy: opts.Actor,
+	if opts.Versioning.Configured() {
+		// The state that was current is preserved before the marker is written.
+		//
+		// A delete marker on a key that never existed is still a delete marker:
+		// S3 creates one and reports success, which is why this runs before the
+		// not-found check below rather than after it.
+		if _, err := supersede(ctx, tx, removed, opts); err != nil {
+			return result, err
 		}
-		if err := RecordVersion(ctx, tx, superseded); err != nil {
-			return false, err
+
+		markerID := NullVersionID
+		if opts.Versioning == VersioningEnabled {
+			if markerID, err = NewVersionID(); err != nil {
+				return result, err
+			}
+		} else if err := replaceNullVersion(ctx, tx, bucketID, key); err != nil {
+			// A suspended bucket's marker is the null version, and there can
+			// only be one, so any existing null version gives way to it.
+			return result, err
 		}
+
 		marker := &ObjectVersion{
-			BucketID: bucketID, Key: key, IsDeleteMarker: true, CreatedBy: opts.Actor,
+			BucketID: bucketID, Key: key, VersionID: markerID,
+			IsDeleteMarker: true, CreatedBy: opts.Actor,
 		}
 		if err := RecordVersion(ctx, tx, marker); err != nil {
-			return false, err
+			return result, err
 		}
+		result.DeleteMarker = true
+		result.MarkerVersionID = externalVersionID(marker.VersionID)
 	}
 
+	if !removed.Exists {
+		// Nothing was current. On a versioned bucket a marker was still written
+		// above, which S3 treats as a successful delete.
+		result.Deleted = opts.Versioning.Configured()
+		return result, tx.Commit(ctx)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM objects WHERE bucket_id = $1 AND key = $2`,
+		bucketID, key); err != nil {
+		return result, fmt.Errorf("delete object %q: %w", key, err)
+	}
+
+	// The objects row's own reference goes either way. Where the state was
+	// preserved as a version, that version took a reference first and the bytes
+	// survive; where it was not, this is the last reference and the space is
+	// reclaimed.
 	if _, err := ReleaseBlob(ctx, tx, removed.BlobDigest); err != nil {
-		return false, err
+		return result, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit delete object: %w", err)
+		return result, fmt.Errorf("commit delete object: %w", err)
 	}
-	return true, nil
+	result.Deleted = true
+	return result, nil
 }
 
 // previousMetadataHolder decodes a JSONB metadata column straight into an

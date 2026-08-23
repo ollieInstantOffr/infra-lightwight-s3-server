@@ -72,15 +72,22 @@ func RecordVersion(ctx context.Context, q Querier, version *ObjectVersion) error
 		}
 	}
 
+	// A zero CreatedAt means "now"; callers preserving a superseded state pass
+	// the time it was originally written instead.
+	var createdAt any
+	if !version.CreatedAt.IsZero() {
+		createdAt = version.CreatedAt
+	}
+
 	err = q.QueryRow(ctx, `
 		INSERT INTO object_versions
 			(bucket_id, key, version_id, blob_digest, size, etag, content_type,
-			 metadata, is_delete_marker, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 metadata, is_delete_marker, created_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11::timestamptz, now()))
 		RETURNING id::text, created_at`,
 		version.BucketID, version.Key, version.VersionID, version.BlobDigest,
 		version.Size, version.ETag, version.ContentType, metadata,
-		version.IsDeleteMarker, version.CreatedBy,
+		version.IsDeleteMarker, version.CreatedBy, createdAt,
 	).Scan(&version.ID, &version.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("record object version: %w", err)

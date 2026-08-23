@@ -31,9 +31,13 @@ func (s *Server) handleGetBucketSettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"bucket":            bucket.Name,
-		"publicRead":        settings.PublicRead,
-		"versioning":        settings.Versioning,
+		"bucket":     bucket.Name,
+		"publicRead": settings.PublicRead,
+		// The console shows a switch; the state behind it is reported too, so
+		// the difference between suspended and never-enabled is visible to
+		// anyone who needs it without complicating the control.
+		"versioning":        settings.Versioning.Versioned(),
+		"versioningState":   string(settings.Versioning),
 		"corsRules":         settings.CORSRules,
 		"lifecycleRules":    settings.Lifecycle,
 		"updatedAt":         settings.UpdatedAt,
@@ -44,7 +48,13 @@ func (s *Server) handleGetBucketSettings(w http.ResponseWriter, r *http.Request)
 }
 
 type bucketSettingsRequest struct {
-	PublicRead     bool               `json:"publicRead"`
+	PublicRead bool `json:"publicRead"`
+	// Versioning stays a boolean on the console's wire format. The three-state
+	// distinction exists for S3 clients, and asking someone clicking a toggle
+	// to understand the difference between suspended and never-enabled would be
+	// exposing an implementation detail of the API rather than a choice.
+	// Turning it off suspends, which is the only thing S3 permits once it has
+	// been on.
 	Versioning     bool               `json:"versioning"`
 	CORSRules      []db.CORSRule      `json:"corsRules"`
 	LifecycleRules []db.LifecycleRule `json:"lifecycleRules"`
@@ -78,10 +88,20 @@ func (s *Server) handleSaveBucketSettings(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	versioning := previous.Versioning
+	if request.Versioning {
+		versioning = db.VersioningEnabled
+	} else if previous.Versioning.Configured() {
+		// Never back to unversioned: S3 does not allow it, and a bucket that
+		// claimed never to have had versions while holding version ids already
+		// handed out would be lying to its clients.
+		versioning = db.VersioningSuspended
+	}
+
 	settings := &db.BucketSettings{
 		BucketID:   bucket.ID,
 		PublicRead: request.PublicRead,
-		Versioning: request.Versioning,
+		Versioning: versioning,
 		CORSRules:  request.CORSRules,
 		Lifecycle:  request.LifecycleRules,
 	}
@@ -101,9 +121,10 @@ func (s *Server) handleSaveBucketSettings(w http.ResponseWriter, r *http.Request
 	// is exactly the question an audit log exists to answer.
 	s.audit(r, db.ActionBucketSettings, "bucket", bucket.Name, map[string]any{
 		"publicRead": map[string]bool{"from": previous.PublicRead, "to": settings.PublicRead},
-		"versioning": map[string]bool{"from": previous.Versioning, "to": settings.Versioning},
-		"corsRules":  len(settings.CORSRules),
-		"lifecycle":  len(settings.Lifecycle),
+		"versioning": map[string]string{
+			"from": string(previous.Versioning), "to": string(settings.Versioning)},
+		"corsRules": len(settings.CORSRules),
+		"lifecycle": len(settings.Lifecycle),
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{"message": "Settings saved."})

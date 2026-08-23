@@ -14,7 +14,10 @@ type BucketSettings struct {
 	// writes: a publicly writable bucket is an open file drop, and nobody means
 	// to create one.
 	PublicRead bool
-	Versioning bool
+	// Versioning has three states, not two. Suspended is not the same as never
+	// having been enabled — existing versions survive and stay addressable
+	// while new writes stop creating them — and clients check the difference.
+	Versioning VersioningState
 	CORSRules  []CORSRule
 	Lifecycle  []LifecycleRule
 	UpdatedAt  time.Time
@@ -41,11 +44,16 @@ type LifecycleRule struct {
 // stored. A bucket with no settings row is not an error: it simply has never
 // been configured, and every option is off.
 func GetBucketSettings(ctx context.Context, q Querier, bucketID string) (*BucketSettings, error) {
-	settings := &BucketSettings{BucketID: bucketID, CORSRules: []CORSRule{}, Lifecycle: []LifecycleRule{}}
+	settings := &BucketSettings{
+		BucketID:   bucketID,
+		Versioning: VersioningUnversioned,
+		CORSRules:  []CORSRule{},
+		Lifecycle:  []LifecycleRule{},
+	}
 	var cors, lifecycle []byte
 
 	err := q.QueryRow(ctx, `
-		SELECT public_read, versioning, cors_rules, lifecycle_rules, updated_at
+		SELECT public_read, versioning_state, cors_rules, lifecycle_rules, updated_at
 		FROM bucket_settings WHERE bucket_id = $1`, bucketID,
 	).Scan(&settings.PublicRead, &settings.Versioning, &cors, &lifecycle, &settings.UpdatedAt)
 	if err != nil {
@@ -78,11 +86,11 @@ func SaveBucketSettings(ctx context.Context, q Querier, settings *BucketSettings
 	}
 
 	_, err = q.Exec(ctx, `
-		INSERT INTO bucket_settings (bucket_id, public_read, versioning, cors_rules, lifecycle_rules)
+		INSERT INTO bucket_settings (bucket_id, public_read, versioning_state, cors_rules, lifecycle_rules)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (bucket_id) DO UPDATE SET
 			public_read     = EXCLUDED.public_read,
-			versioning      = EXCLUDED.versioning,
+			versioning_state = EXCLUDED.versioning_state,
 			cors_rules      = EXCLUDED.cors_rules,
 			lifecycle_rules = EXCLUDED.lifecycle_rules,
 			updated_at      = now()`,
