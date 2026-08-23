@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/storage"
@@ -27,12 +28,21 @@ type Server struct {
 	// Metrics counts requests for the console's overview. Optional: nil simply
 	// means nothing is counted.
 	Metrics RequestCounter
+	// Scrape is optional. Nil simply means nothing is exporting metrics, which
+	// is the case in most tests.
+	Scrape RequestObserver
 	// Logs receives completed requests for the console's log viewer. Optional.
 	Logs RequestRecorder
 }
 
 // RequestCounter accumulates request counts. The metrics collector satisfies
 // it; taking an interface keeps this package independent of it.
+// RequestObserver records a completed request for scraping. The metrics
+// registry satisfies it.
+type RequestObserver interface {
+	Observe(surface, operation string, status int, duration time.Duration, bytesIn, bytesOut int64)
+}
+
 type RequestCounter interface {
 	Record(status int, bytesIn, bytesOut int64)
 }
@@ -49,6 +59,12 @@ func (s *Server) Handler() http.Handler {
 	if s.Metrics != nil {
 		handler = WithMetrics(s.Metrics, handler)
 	}
+	if s.Scrape != nil {
+		handler = WithScrapeMetrics(s.Scrape, handler)
+	}
+	// Outside everything that reads it, so the access log and the metrics both
+	// see the operation the router recorded.
+	handler = WithRequestInfo(handler)
 	return WithRequestID(handler)
 }
 
@@ -83,6 +99,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routeService(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
+		noteOperation(r.Context(), "ListBuckets")
 		s.handleListBuckets(w, r)
 		return
 	}
@@ -105,6 +122,7 @@ func (s *Server) routeBucket(w http.ResponseWriter, r *http.Request) {
 		if !s.permit(w, r, bucket, "", access{db.PermissionDelete, reachesSomewhere}) {
 			return
 		}
+		noteOperation(r.Context(), "DeleteObjects")
 		s.withBucket(w, r, s.handleDeleteObjects)
 		return
 	}
@@ -117,6 +135,7 @@ func (s *Server) routeBucket(w http.ResponseWriter, r *http.Request) {
 		if !s.permit(w, r, bucket, "", access{db.PermissionWrite, reachesEverything}) {
 			return
 		}
+		noteOperation(r.Context(), "PutBucketVersioning")
 		s.withBucket(w, r, s.handlePutBucketVersioning)
 		return
 	}
@@ -126,6 +145,7 @@ func (s *Server) routeBucket(w http.ResponseWriter, r *http.Request) {
 		if !s.permit(w, r, bucket, "", createBucket) {
 			return
 		}
+		noteOperation(r.Context(), "CreateBucket")
 		s.handleCreateBucket(w, r)
 	case http.MethodGet:
 		// Listing a bucket, and listing its multipart uploads, are both reads
@@ -134,16 +154,19 @@ func (s *Server) routeBucket(w http.ResponseWriter, r *http.Request) {
 		if !s.permit(w, r, bucket, "", readBucket) {
 			return
 		}
+		noteOperation(r.Context(), "GetBucket")
 		s.handleGetBucket(w, r)
 	case http.MethodHead:
 		if !s.permit(w, r, bucket, "", readBucket) {
 			return
 		}
+		noteOperation(r.Context(), "HeadBucket")
 		s.handleHeadBucket(w, r)
 	case http.MethodDelete:
 		if !s.permit(w, r, bucket, "", deleteBucket) {
 			return
 		}
+		noteOperation(r.Context(), "DeleteBucket")
 		s.handleDeleteBucket(w, r)
 	default:
 		s.unsupported(w, r)
@@ -167,30 +190,35 @@ func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
 		if !s.permit(w, r, bucket, key, writeObject) {
 			return
 		}
+		noteOperation(r.Context(), "CreateMultipartUpload")
 		s.withBucket(w, r, s.handleCreateMultipartUpload)
 		return
 	case r.Method == http.MethodPut && uploadID != "":
 		if !s.permit(w, r, bucket, key, writeObject) {
 			return
 		}
+		noteOperation(r.Context(), "UploadPart")
 		s.withUpload(w, r, uploadID, s.handleUploadPart)
 		return
 	case r.Method == http.MethodPost && uploadID != "":
 		if !s.permit(w, r, bucket, key, writeObject) {
 			return
 		}
+		noteOperation(r.Context(), "CompleteMultipartUpload")
 		s.withUpload(w, r, uploadID, s.handleCompleteMultipartUpload)
 		return
 	case r.Method == http.MethodDelete && uploadID != "":
 		if !s.permit(w, r, bucket, key, writeObject) {
 			return
 		}
+		noteOperation(r.Context(), "AbortMultipartUpload")
 		s.withUpload(w, r, uploadID, s.handleAbortMultipartUpload)
 		return
 	case r.Method == http.MethodGet && uploadID != "":
 		if !s.permit(w, r, bucket, key, writeObject) {
 			return
 		}
+		noteOperation(r.Context(), "ListParts")
 		s.withUpload(w, r, uploadID, s.handleListParts)
 		return
 	}
@@ -212,6 +240,7 @@ func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
 		if !s.permit(w, r, sourceBucket, sourceKey, readObject) {
 			return
 		}
+		noteOperation(r.Context(), "CopyObject")
 		s.withBucket(w, r, func(w http.ResponseWriter, r *http.Request, bucket *db.Bucket) {
 			s.handleCopyObject(w, r, bucket, source)
 		})
@@ -223,21 +252,25 @@ func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
 		if !s.permit(w, r, bucket, key, writeObject) {
 			return
 		}
+		noteOperation(r.Context(), "PutObject")
 		s.handlePutObject(w, r)
 	case http.MethodGet:
 		if !s.permit(w, r, bucket, key, readObject) {
 			return
 		}
+		noteOperation(r.Context(), "GetObject")
 		s.handleGetObject(w, r)
 	case http.MethodHead:
 		if !s.permit(w, r, bucket, key, readObject) {
 			return
 		}
+		noteOperation(r.Context(), "HeadObject")
 		s.handleHeadObject(w, r)
 	case http.MethodDelete:
 		if !s.permit(w, r, bucket, key, deleteObject) {
 			return
 		}
+		noteOperation(r.Context(), "DeleteObject")
 		s.handleDeleteObject(w, r)
 	default:
 		s.unsupported(w, r)

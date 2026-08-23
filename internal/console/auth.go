@@ -384,3 +384,30 @@ func userResponse(user *db.User) map[string]any {
 		"lastLoginAt": user.LastLoginAt,
 	}
 }
+
+// withOptionalSession attaches the caller's identity when they have one, and
+// lets the request through when they do not.
+//
+// For endpoints that accept more than one kind of credential and have to decide
+// for themselves — /metrics takes either a scraper's bearer token or an
+// administrator's session, and requireSession would reject the scraper before
+// the handler ever saw its token.
+//
+// It grants nothing on its own. A handler behind this is responsible for its
+// own refusal, which is a sharper edge than requireSession and the reason it is
+// used in exactly one place.
+func (s *Server) withOptionalSession(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie(sessionCookieName)
+		if err != nil || cookie.Value == "" {
+			next(w, r)
+			return
+		}
+		user, err := db.TouchSession(r.Context(), s.DB, db.HashToken(cookie.Value), sessionIdleTTL)
+		if err != nil {
+			next(w, r)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
+	}
+}

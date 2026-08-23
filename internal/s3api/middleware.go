@@ -70,7 +70,9 @@ func WithAccessLog(log *slog.Logger, recorder RequestRecorder, proxies *httpx.Pr
 		start := time.Now()
 		rec := &responseRecorder{ResponseWriter: w}
 
-		r, info := withRequestInfo(r)
+		// The holder is attached further out, so both this and the metrics
+		// middleware read the same one.
+		info := infoFrom(r.Context())
 		next.ServeHTTP(rec, r)
 
 		if rec.status == 0 {
@@ -228,5 +230,34 @@ func WithMetrics(counter RequestCounter, next http.Handler) http.Handler {
 			bytesIn = 0
 		}
 		counter.Record(status, bytesIn, recorder.written)
+	})
+}
+
+// WithScrapeMetrics feeds the counters a Prometheus scrape reads.
+//
+// Separate from WithMetrics, which rolls counts into hourly cells for the
+// console's chart. A scraper needs monotonic counters and a duration
+// histogram; deriving those from an hourly rollup would hand it a counter that
+// resets every hour, which is the one shape a counter must never have.
+func WithScrapeMetrics(observer RequestObserver, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		recorder := &responseRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		bytesIn := r.ContentLength
+		if bytesIn < 0 {
+			bytesIn = 0
+		}
+		// The operation is whatever the router settled on. A request rejected
+		// before routing — a bad signature, a denied scope — has none, and is
+		// counted under Unknown rather than being dropped: those are exactly
+		// the requests someone watching an error rate wants to see.
+		observer.Observe("s3", Operation(r.Context()), status,
+			time.Since(started), bytesIn, recorder.written)
 	})
 }

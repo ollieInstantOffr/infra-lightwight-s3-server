@@ -127,10 +127,13 @@ func (s *Server) handleGetBucket(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case query.Has("versioning"):
+		noteOperation(r.Context(), "GetBucketVersioning")
 		s.handleGetBucketVersioning(w, r, bucket)
 	case query.Has("versions"):
+		noteOperation(r.Context(), "ListObjectVersions")
 		s.handleListObjectVersions(w, r, bucket)
 	case query.Has("location"):
+		noteOperation(r.Context(), "GetBucketLocation")
 		// us-east-1 is reported as an empty constraint, matching S3.
 		value := s.Region
 		if value == "us-east-1" {
@@ -138,9 +141,15 @@ func (s *Server) handleGetBucket(w http.ResponseWriter, r *http.Request) {
 		}
 		writeXML(w, r, http.StatusOK, LocationConstraint{Xmlns: s3Namespace, Value: value})
 	case query.Has("uploads"):
+		noteOperation(r.Context(), "ListMultipartUploads")
 		s.handleListMultipartUploads(w, r, bucket)
 	default:
 		// A plain GET on a bucket is a listing, in both v1 and v2 form.
+		if query.Get("list-type") == "2" {
+			noteOperation(r.Context(), "ListObjectsV2")
+		} else {
+			noteOperation(r.Context(), "ListObjects")
+		}
 		s.handleListObjects(w, r, bucket)
 	}
 }

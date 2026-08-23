@@ -254,6 +254,22 @@ stored S3 secret is undecryptable and all access keys have to be reissued.
 
 ---
 
+## Monitoring
+
+Prometheus metrics are at `/metrics` on the console port: request and error
+rates by operation, a latency histogram, throughput, per-bucket storage, disk
+headroom, and whether the metadata store is answering.
+
+**[docs/monitoring.md](docs/monitoring.md)** has the scrape config, a Grafana
+dashboard, a starting set of alerting rules, and a note on which alerts are
+better left to Pail's own engine and which to Prometheus.
+
+Set `METRICS_TOKEN` to let a scraper in. Without it the endpoint is still there
+but only a signed-in administrator can read it — bucket names, object counts and
+traffic volume together describe who is using the system and how much.
+
+---
+
 ## Operating it
 
 ```bash

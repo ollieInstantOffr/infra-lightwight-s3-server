@@ -131,6 +131,9 @@ func run() error {
 	}
 
 	collector := metrics.New()
+	// Separate from the collector: one rolls counts into hourly cells for the
+	// console's chart, the other holds the monotonic counters a scrape reads.
+	registry := metrics.NewRegistry(version)
 
 	s3Server := &s3api.Server{
 		DB:        pool,
@@ -140,6 +143,7 @@ func run() error {
 		PublicURL: cfg.PublicS3URL,
 		S3Domain:  cfg.S3Domain,
 		Metrics:   collector,
+		Scrape:    registry,
 		Logs:      logSink,
 		Verifier: &s3api.Verifier{
 			Region:  cfg.S3Region,
@@ -201,6 +205,8 @@ func run() error {
 		Assets:        consoleAssets(log),
 		Logs:          logSink,
 		Sink:          logSink,
+		Registry:      registry,
+		MetricsToken:  cfg.MetricsToken,
 		System: console.SystemInfo{
 			Version:           version,
 			NodeName:          nodeName(),

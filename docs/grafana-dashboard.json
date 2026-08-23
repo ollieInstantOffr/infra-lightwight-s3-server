@@ -1,0 +1,288 @@
+{
+  "title": "Pail",
+  "description": "S3-compatible object storage. See docs/monitoring.md.",
+  "tags": [
+    "pail",
+    "storage"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request rate",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (operation) (rate(pail_requests_total{surface=\"s3\"}[5m]))",
+          "legendFormat": "{{operation}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "description": "S3 requests per second, by operation."
+    },
+    {
+      "id": 2,
+      "title": "Error rate",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(pail_requests_total{surface=\"s3\",status=~\"4xx|5xx\"}[5m])) / sum(rate(pail_requests_total{surface=\"s3\"}[5m]))",
+          "legendFormat": "all failures",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(pail_requests_total{surface=\"s3\",status=\"5xx\"}[5m])) / sum(rate(pail_requests_total{surface=\"s3\"}[5m]))",
+          "legendFormat": "server errors",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": "A 4xx is usually a client and a 5xx is always this server, so both are drawn."
+    },
+    {
+      "id": 3,
+      "title": "Latency",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(pail_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(pail_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pail_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Percentiles rather than an average, which would hide the tail this exists to show."
+    },
+    {
+      "id": 4,
+      "title": "Throughput",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(pail_received_bytes_total[5m]))",
+          "legendFormat": "in",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(pail_sent_bytes_total[5m]))",
+          "legendFormat": "out",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Disk free",
+      "type": "gauge",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "pail_disk_free_bytes / pail_disk_total_bytes",
+          "legendFormat": "free",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": "Objects are stored as a single copy; a full volume fails every write."
+    },
+    {
+      "id": 6,
+      "title": "Stored",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 6,
+        "y": 16,
+        "w": 9,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "sum(pail_bucket_bytes)",
+          "legendFormat": "total",
+          "refId": "A"
+        },
+        {
+          "expr": "pail_bucket_bytes",
+          "legendFormat": "{{bucket}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Objects",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 15,
+        "y": 16,
+        "w": 9,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "pail_bucket_objects",
+          "legendFormat": "{{bucket}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "Alerts firing",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 8,
+        "h": 5
+      },
+      "targets": [
+        {
+          "expr": "pail_alerts_firing",
+          "legendFormat": "{{rule}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "What Pail's own alert engine thinks is wrong."
+    },
+    {
+      "id": 9,
+      "title": "Database",
+      "type": "stat",
+      "gridPos": {
+        "x": 8,
+        "y": 22,
+        "w": 8,
+        "h": 5
+      },
+      "targets": [
+        {
+          "expr": "pail_up_database",
+          "legendFormat": "up",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "0 means the metadata store did not answer; the S3 API rejects every request while it holds."
+    },
+    {
+      "id": 10,
+      "title": "Log entries dropped",
+      "type": "stat",
+      "gridPos": {
+        "x": 16,
+        "y": 22,
+        "w": 8,
+        "h": 5
+      },
+      "targets": [
+        {
+          "expr": "rate(pail_log_entries_dropped_total[10m])",
+          "legendFormat": "dropped/s",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Above zero means the console's Logs screen has holes in it."
+    }
+  ]
+}

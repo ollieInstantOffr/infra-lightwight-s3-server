@@ -76,6 +76,11 @@ type Config struct {
 	// LogSampleRate is the fraction of successful requests kept in the
 	// queryable log. Failures and slow requests are always kept regardless.
 	LogSampleRate float64
+	// MetricsToken authenticates a Prometheus scrape of /metrics. Empty leaves
+	// the endpoint reachable only by a signed-in administrator, which is the
+	// safe default: metrics describe who is using this system and how much, and
+	// an unauthenticated one is a quiet information leak.
+	MetricsToken string
 	// LogSlowRequestMS retains any request at least this slow, whatever its
 	// status — a slow success is often the more interesting event.
 	LogSlowRequestMS int
@@ -117,6 +122,7 @@ func Load() (*Config, error) {
 		ResendFrom:       envStr("RESEND_FROM", ""),
 		TrustedProxies:   envList("TRUSTED_PROXIES", "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
 		LogSampleRate:    envFloat("LOG_SAMPLE_RATE", 0.01, fail),
+		MetricsToken:     os.Getenv("METRICS_TOKEN"),
 		LogSlowRequestMS: envInt("LOG_SLOW_REQUEST_MS", 3000, fail),
 	}
 
@@ -229,6 +235,9 @@ func (c *Config) LogValue() slog.Value {
 		slog.Int("trusted_proxies", len(c.TrustedProxies)),
 		slog.String("log_level", c.LogLevel.String()),
 		slog.Float64("log_sample_rate", c.LogSampleRate),
+		// Whether it is set, never its value. A startup log is the first thing
+		// anyone pastes into a bug report.
+		slog.Bool("metrics_token_configured", c.MetricsToken != ""),
 	)
 }
 

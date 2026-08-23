@@ -10,6 +10,7 @@ import (
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/logs"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/metrics"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/storage"
 )
@@ -42,6 +43,15 @@ type Server struct {
 	// Sink exposes the sampling policy so it can be adjusted at runtime.
 	Sink LogSink
 
+	// Registry holds the counters the /metrics endpoint renders. Nil disables
+	// the endpoint entirely rather than serving an empty one, which would look
+	// like a server doing nothing.
+	Registry *metrics.Registry
+	// MetricsToken authenticates a scraper. Empty means only a signed-in
+	// administrator can read /metrics — the safe default, since somebody will
+	// deploy this without reading the documentation.
+	MetricsToken string
+
 	// AdminEmail is the bootstrap administrator, shown on the first-run screen
 	// so a fresh install says which address can sign in.
 	AdminEmail string
@@ -72,6 +82,14 @@ func (s *Server) Handler() http.Handler {
 	// Health probes are unauthenticated so an orchestrator can reach them.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
+
+	// Metrics. Routed through the optional-session wrapper rather than
+	// requireSession, because the handler accepts either a scraper's bearer
+	// token or an administrator's session and has to see both to choose. It
+	// refuses on its own when neither is present.
+	if s.Registry != nil {
+		mux.HandleFunc("GET /metrics", s.withOptionalSession(s.handleMetrics))
+	}
 
 	// Authentication. Open by necessity: these are how a session is obtained.
 	mux.HandleFunc("POST /api/auth/magic-link", s.handleRequestMagicLink)

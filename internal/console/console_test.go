@@ -17,6 +17,7 @@ import (
 
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/metrics"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/storage"
 )
@@ -64,6 +65,9 @@ type consoleFixture struct {
 	mailer *captureMailer
 	pool   *db.Pool
 	admin  *db.User
+	// server is exposed so a test can adjust configuration the fixture does not
+	// take as an argument, such as the metrics token.
+	server *Server
 }
 
 func newConsole(t *testing.T) *consoleFixture {
@@ -110,6 +114,7 @@ func newConsole(t *testing.T) *consoleFixture {
 	server := &Server{
 		DB: pool, Blobs: blobs, Cipher: cipher, Mailer: mailer, Proxies: trust,
 		Log: quiet, Region: "us-east-1", SessionSecret: strings.Repeat("s", 40),
+		Registry: metrics.NewRegistry("test"),
 	}
 
 	httpSrv := httptest.NewServer(server.Handler())
@@ -125,7 +130,10 @@ func newConsole(t *testing.T) *consoleFixture {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 
-	return &consoleFixture{url: httpSrv.URL, client: client, mailer: mailer, pool: pool, admin: admin}
+	return &consoleFixture{
+		url: httpSrv.URL, client: client, mailer: mailer,
+		pool: pool, admin: admin, server: server,
+	}
 }
 
 // do sends a request and returns the status and decoded body.

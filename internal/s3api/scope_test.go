@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -402,4 +403,81 @@ func readBody(t *testing.T, srv *httptest.Server, rt route) string {
 		t.Fatalf("read body: %v", err)
 	}
 	return string(body)
+}
+
+// recordingObserver captures what the metrics middleware reported.
+type recordingObserver struct {
+	mu         sync.Mutex
+	operations []string
+}
+
+func (o *recordingObserver) Observe(_, operation string, _ int, _ time.Duration, _, _ int64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.operations = append(o.operations, operation)
+}
+
+func (o *recordingObserver) seen() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.operations...)
+}
+
+// The metrics middleware reads the operation the router recorded, and the two
+// are separated by the whole middleware stack. When the holder that carries it
+// was attached too far in, every request was reported as Unknown — a metric
+// that existed, parsed, and had plausible numbers in it, all of them wrong.
+// Nothing about that fails loudly, so it gets a test.
+func TestMetricsSeeTheRoutedOperation(t *testing.T) {
+	observer := &recordingObserver{}
+
+	pool, err := db.Connect(context.Background(), testDSN(t, "test_s3api_pkg"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := db.Migrate(context.Background(), pool, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	blobs, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("storage.New: %v", err)
+	}
+	trust, _ := httpx.NewProxyTrust(nil)
+
+	server := &Server{
+		DB: pool, Blobs: blobs, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Region: "us-east-1", Scrape: observer,
+		Verifier: &Verifier{
+			Region: "us-east-1", Proxies: trust,
+			Lookup: func(_ context.Context, _ string) (KeyMaterial, error) {
+				return KeyMaterial{SecretKey: exampleSecretKey, Grant: db.UnrestrictedGrant()}, nil
+			},
+		},
+	}
+	srv := httptest.NewServer(server.Handler())
+	t.Cleanup(srv.Close)
+
+	for _, rt := range []route{
+		{name: "CreateBucket", method: http.MethodPut, target: "/mbucket"},
+		{name: "PutObject", method: http.MethodPut, target: "/mbucket/k", body: "x"},
+		{name: "GetObject", method: http.MethodGet, target: "/mbucket/k"},
+		{name: "ListObjectsV2", method: http.MethodGet, target: "/mbucket?list-type=2"},
+	} {
+		response := send(t, srv, rt)
+		response.Body.Close()
+	}
+
+	seen := observer.seen()
+	want := []string{"CreateBucket", "PutObject", "GetObject", "ListObjectsV2"}
+	if len(seen) != len(want) {
+		t.Fatalf("observed %v, want %v", seen, want)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("observation %d = %q, want %q (all Unknown means the holder is attached too far in)",
+				i, seen[i], want[i])
+		}
+	}
 }

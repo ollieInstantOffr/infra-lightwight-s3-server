@@ -56,8 +56,13 @@ type Sink struct {
 	node     string
 
 	// dropped counts entries discarded because the buffer was full. Reported
-	// rather than silently lost: a log with holes in it must say so.
+	// rather than silently lost: a log with holes in it must say so. Reset on
+	// each flush, so the warning describes that flush rather than all time.
 	dropped int64
+	// droppedTotal is the same count since the process started, which is what a
+	// scraper needs — a counter that fell back to zero every flush would read
+	// as a process restart.
+	droppedTotal int64
 }
 
 // New returns a sink for a node.
@@ -110,6 +115,7 @@ func (s *Sink) RecordRequest(entry db.RequestLog) {
 
 	if len(s.requests) >= maxBuffer {
 		s.dropped++
+		s.droppedTotal++
 		return
 	}
 	entry.Node = s.node
@@ -123,6 +129,7 @@ func (s *Sink) RecordEvent(event db.ServerEvent) {
 
 	if len(s.events) >= maxBuffer {
 		s.dropped++
+		s.droppedTotal++
 		return
 	}
 	event.Node = s.node
@@ -181,4 +188,16 @@ func (s *Sink) Run(ctx context.Context, pool *db.Pool, log *slog.Logger) {
 			s.Flush(ctx, pool, log)
 		}
 	}
+}
+
+// DroppedTotal is how many entries have been discarded since this process
+// started, for the metrics endpoint.
+//
+// Separate from the counter drain resets: that one exists to report a burst
+// once, this one has to be monotonic or a scraper would see it fall to zero
+// every couple of seconds and read that as a counter reset.
+func (s *Sink) DroppedTotal() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.droppedTotal
 }

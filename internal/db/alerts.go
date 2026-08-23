@@ -340,3 +340,34 @@ func CountAuthFailures(ctx context.Context, q Querier, window time.Duration) (so
 	}
 	return source, count, nil
 }
+
+// CountFiringAlerts returns how many alerts are live per rule.
+//
+// Exported for the metrics endpoint, which needs a number per rule rather than
+// the alert bodies the console renders. Acknowledged alerts count as live: the
+// condition still holds, and acknowledging stops the email rather than fixing
+// anything.
+func CountFiringAlerts(ctx context.Context, q Querier) (map[string]int, error) {
+	rows, err := q.Query(ctx, `
+		SELECT rule_id, count(*)
+		FROM alerts
+		WHERE state <> 'resolved'
+		GROUP BY rule_id`)
+	if err != nil {
+		return nil, fmt.Errorf("count firing alerts: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]int)
+	for rows.Next() {
+		var (
+			rule  string
+			count int
+		)
+		if err := rows.Scan(&rule, &count); err != nil {
+			return nil, fmt.Errorf("scan firing alert count: %w", err)
+		}
+		out[rule] = count
+	}
+	return out, rows.Err()
+}

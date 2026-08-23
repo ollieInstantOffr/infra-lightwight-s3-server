@@ -34,6 +34,9 @@ services:
       RESEND_FROM: ${RESEND_FROM:-}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Unset leaves /metrics reachable only by a signed-in administrator,
+      # which is the safe default. See docs/monitoring.md.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
     ports:
       - "${S3_BIND:-127.0.0.1}:8443:8443"
       - "${CONSOLE_BIND:-127.0.0.1}:8444:8444"

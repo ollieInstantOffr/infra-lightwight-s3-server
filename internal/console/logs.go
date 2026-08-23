@@ -15,6 +15,10 @@ import (
 type LogSink interface {
 	Policy() logs.Policy
 	SetPolicy(policy logs.Policy)
+	// DroppedTotal is exported for the metrics endpoint. A log with holes in
+	// it has to say so, and until this was scrapeable the only sign was a
+	// warning on stdout that nothing was watching.
+	DroppedTotal() int64
 }
 
 // handleListLogs returns a page of request logs.
