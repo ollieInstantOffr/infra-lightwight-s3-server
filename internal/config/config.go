@@ -73,6 +73,12 @@ type Config struct {
 	TrustedProxies []string
 
 	LogLevel slog.Level
+	// LogSampleRate is the fraction of successful requests kept in the
+	// queryable log. Failures and slow requests are always kept regardless.
+	LogSampleRate float64
+	// LogSlowRequestMS retains any request at least this slow, whatever its
+	// status — a slow success is often the more interesting event.
+	LogSlowRequestMS int
 }
 
 // ResendConfigured reports whether outbound email can actually be sent. When it
@@ -110,6 +116,8 @@ func Load() (*Config, error) {
 		ResendAPIKey:     envStr("RESEND_API_KEY", ""),
 		ResendFrom:       envStr("RESEND_FROM", ""),
 		TrustedProxies:   envList("TRUSTED_PROXIES", "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
+		LogSampleRate:    envFloat("LOG_SAMPLE_RATE", 0.01, fail),
+		LogSlowRequestMS: envInt("LOG_SLOW_REQUEST_MS", 3000, fail),
 	}
 
 	level, err := parseLogLevel(envStr("LOG_LEVEL", "info"))
@@ -117,6 +125,10 @@ func Load() (*Config, error) {
 		fail("LOG_LEVEL: %v", err)
 	}
 	cfg.LogLevel = level
+
+	if cfg.LogSampleRate < 0 || cfg.LogSampleRate > 1 {
+		fail("LOG_SAMPLE_RATE must be between 0 and 1, got %v", cfg.LogSampleRate)
+	}
 
 	validatePort("S3_PORT", cfg.S3Port, fail)
 	validatePort("CONSOLE_PORT", cfg.ConsolePort, fail)
@@ -216,6 +228,7 @@ func (c *Config) LogValue() slog.Value {
 		slog.Bool("resend_configured", c.ResendConfigured()),
 		slog.Int("trusted_proxies", len(c.TrustedProxies)),
 		slog.String("log_level", c.LogLevel.String()),
+		slog.Float64("log_sample_rate", c.LogSampleRate),
 	)
 }
 
@@ -237,6 +250,19 @@ func envInt(key string, def int, fail func(string, ...any)) int {
 		return def
 	}
 	return n
+}
+
+func envFloat(key string, def float64, fail func(string, ...any)) float64 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return def
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		fail("%s must be a number, got %q", key, raw)
+		return def
+	}
+	return value
 }
 
 func envList(key, def string) []string {

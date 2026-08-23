@@ -202,6 +202,11 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	apiErr := AsAPIError(err)
 	requestID := RequestIDFrom(r.Context())
 
+	// Recorded for the log before the response is written. The client sees the
+	// mapped code; the log keeps the underlying reason, which is what turns a
+	// wall of 403s into "this client's clock is twenty minutes fast".
+	noteFailure(r.Context(), apiErr.Code, err.Error())
+
 	w.Header().Set("x-amz-request-id", requestID)
 	w.Header().Set("x-amz-error-code", apiErr.Code)
 	w.Header().Set("Content-Type", "application/xml")

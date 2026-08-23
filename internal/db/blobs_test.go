@@ -49,7 +49,11 @@ func testPool(t *testing.T) *Pool {
 		t.Fatalf("migrate: %v", err)
 	}
 	// Ordered so foreign keys are satisfied: objects reference blobs.
-	for _, stmt := range []string{`DELETE FROM buckets`, `DELETE FROM blobs`} {
+	for _, stmt := range []string{
+		`DELETE FROM buckets`, `DELETE FROM blobs`,
+		`DELETE FROM request_logs`, `DELETE FROM server_events`,
+		`DELETE FROM alerts`, `DELETE FROM alert_rules`,
+	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatalf("reset (%s): %v", stmt, err)
 		}

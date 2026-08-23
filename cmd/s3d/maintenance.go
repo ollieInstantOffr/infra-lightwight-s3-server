@@ -40,6 +40,13 @@ const (
 	// one per hour respectively.
 	auditRetention  = 365 * 24 * time.Hour
 	metricRetention = 90 * 24 * time.Hour
+
+	// Failures are kept far longer than sampled successes. A sample exists to
+	// show traffic shape and is worthless after a few days; a failure from last
+	// month may be exactly what someone is trying to explain.
+	logFailureRetention  = 30 * 24 * time.Hour
+	logSampleRetention   = 3 * 24 * time.Hour
+	serverEventRetention = 30 * 24 * time.Hour
 )
 
 // runMaintenance sweeps until ctx is cancelled.
@@ -86,6 +93,15 @@ func sweepOnce(ctx context.Context, pool *db.Pool, blobs *storage.Store, log *sl
 
 	if err := db.PurgeMetrics(ctx, pool, metricRetention); err != nil {
 		log.Warn("could not purge request metrics", "error", err)
+	}
+
+	// This is a storage server; filling its own database with logs about
+	// storing things would be a poor joke.
+	if purged, err := db.PurgeLogs(ctx, pool,
+		logFailureRetention, logSampleRetention, serverEventRetention); err != nil {
+		log.Warn("could not purge logs", "error", err)
+	} else if purged > 0 {
+		log.Info("purged old log entries", "count", purged)
 	}
 }
 

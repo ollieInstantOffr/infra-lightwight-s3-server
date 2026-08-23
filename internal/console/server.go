@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/logs"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/storage"
 )
@@ -35,6 +37,8 @@ type Server struct {
 	// Assets serves the built SPA. Nil until the frontend is embedded, in which
 	// case the API still works and the root returns a plain message.
 	Assets http.Handler
+	// Logs receives completed console requests. Optional.
+	Logs RequestRecorder
 
 	// AdminEmail is the bootstrap administrator, shown on the first-run screen
 	// so a fresh install says which address can sign in.
@@ -174,6 +178,11 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, map[string]any{"ready": ready, "checks": checks})
 }
 
+// RequestRecorder receives completed requests for the log viewer.
+type RequestRecorder interface {
+	RecordRequest(entry db.RequestLog)
+}
+
 // withRequestLog logs one line per console request.
 func (s *Server) withRequestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,13 +203,41 @@ func (s *Server) withRequestLog(next http.Handler) http.Handler {
 			"status", recorder.status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"ip", s.Proxies.ClientIP(r),
+			logs.Skip(),
 		)
+
+		if s.Logs == nil {
+			return
+		}
+		// Static assets would drown the log without saying anything: a page
+		// load is one interesting request and a dozen font and script fetches.
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			return
+		}
+
+		actor := ""
+		if user, ok := UserFrom(r.Context()); ok {
+			actor = user.Email
+		}
+		s.Logs.RecordRequest(db.RequestLog{
+			At:         start,
+			Surface:    "console",
+			Method:     r.Method,
+			Path:       r.URL.Path,
+			Status:     recorder.status,
+			BytesOut:   recorder.written,
+			DurationMS: int(time.Since(start).Milliseconds()),
+			Actor:      actor,
+			ClientIP:   s.Proxies.ClientIP(r),
+			UserAgent:  r.UserAgent(),
+		})
 	})
 }
 
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status  int
+	written int64
 }
 
 func (w *statusRecorder) WriteHeader(status int) {
@@ -214,7 +251,9 @@ func (w *statusRecorder) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	return w.ResponseWriter.Write(p)
+	n, err := w.ResponseWriter.Write(p)
+	w.written += int64(n)
+	return n, err
 }
 
 func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }

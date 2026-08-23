@@ -5,6 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/logs"
 )
 
 // WithRequestID stamps every request with an identifier, echoes it back, and
@@ -48,16 +52,25 @@ func (w *responseRecorder) Write(p []byte) (int, error) {
 // matters for flushing and for hijacking a connection.
 func (w *responseRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// WithAccessLog logs one line per request once it completes.
+// RequestRecorder receives completed requests for the console's log. The logs
+// sink satisfies it; taking an interface keeps this package independent of it.
+type RequestRecorder interface {
+	RecordRequest(entry db.RequestLog)
+}
+
+// WithAccessLog logs one line per request once it completes, to stdout and —
+// when a recorder is supplied — to the console's queryable log.
 //
 // The access key id is included where authentication succeeded, which is what
 // turns "someone is filling the disk" into "this credential is filling the
-// disk". Secrets and signatures are never logged.
-func WithAccessLog(log *slog.Logger, next http.Handler) http.Handler {
+// disk". Secrets, signatures and presigned query parameters are never logged:
+// a presigned URL in a log file is a working credential.
+func WithAccessLog(log *slog.Logger, recorder RequestRecorder, proxies *httpx.ProxyTrust, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &responseRecorder{ResponseWriter: w}
 
+		r, info := withRequestInfo(r)
 		next.ServeHTTP(rec, r)
 
 		if rec.status == 0 {
@@ -80,6 +93,9 @@ func WithAccessLog(log *slog.Logger, next http.Handler) http.Handler {
 
 		// Client mistakes are not server problems; only 5xx deserves the
 		// operator's attention at error level.
+		// Marked request-scoped so these do not also land in the server event
+		// log: they are already in the request log, with the reason attached.
+		attrs = append(attrs, logs.Skip())
 		switch {
 		case rec.status >= 500:
 			log.Error("request failed", attrs...)
@@ -88,6 +104,50 @@ func WithAccessLog(log *slog.Logger, next http.Handler) http.Handler {
 		default:
 			log.Info("request", attrs...)
 		}
+
+		if recorder == nil {
+			return
+		}
+
+		bucket, key, code, reason := info.snapshot()
+		if bucket == "" {
+			// Authentication runs before routing, so a rejected request never
+			// reached the code that knows its bucket. Deriving it here is what
+			// makes the bucket filter work on exactly the requests someone
+			// wants to filter.
+			bucket, key, _ = splitPath(r.URL.EscapedPath())
+		}
+		bytesIn := r.ContentLength
+		if bytesIn < 0 {
+			// Unknown for a chunked upload until it has been read. Counting it
+			// as zero understates rather than inventing a number.
+			bytesIn = 0
+		}
+		accessKeyID := ""
+		if id, ok := IdentityFrom(r.Context()); ok {
+			accessKeyID = id.AccessKeyID
+		}
+
+		recorder.RecordRequest(db.RequestLog{
+			At:        start,
+			RequestID: RequestIDFrom(r.Context()),
+			Surface:   "s3",
+			Method:    r.Method,
+			Bucket:    bucket,
+			Key:       key,
+			// The path only. The query string is dropped wholesale because a
+			// presigned request carries its signature there.
+			Path:        r.URL.Path,
+			Status:      rec.status,
+			ErrorCode:   code,
+			Reason:      reason,
+			BytesIn:     bytesIn,
+			BytesOut:    rec.written,
+			DurationMS:  int(time.Since(start).Milliseconds()),
+			AccessKeyID: accessKeyID,
+			ClientIP:    proxies.ClientIP(r),
+			UserAgent:   r.UserAgent(),
+		})
 	})
 }
 
@@ -135,7 +195,11 @@ func (s *Server) Authenticate(log *slog.Logger, next http.Handler) http.Handler 
 				"method", r.Method,
 				"path", r.URL.Path,
 				"error", err,
+				logs.Skip(),
 			)
+			// Captured explicitly: the mapped code deliberately hides the
+			// cause from the client, and this is the one place that knows it.
+			noteFailure(r.Context(), AsAPIError(err).Code, err.Error())
 			WriteError(w, r, err)
 			return
 		}

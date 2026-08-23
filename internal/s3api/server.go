@@ -27,6 +27,8 @@ type Server struct {
 	// Metrics counts requests for the console's overview. Optional: nil simply
 	// means nothing is counted.
 	Metrics RequestCounter
+	// Logs receives completed requests for the console's log viewer. Optional.
+	Logs RequestRecorder
 }
 
 // RequestCounter accumulates request counts. The metrics collector satisfies
@@ -43,7 +45,7 @@ type RequestCounter interface {
 func (s *Server) Handler() http.Handler {
 	var handler http.Handler = http.HandlerFunc(s.route)
 	handler = s.Authenticate(s.Log, handler)
-	handler = WithAccessLog(s.Log, handler)
+	handler = WithAccessLog(s.Log, s.Logs, s.Verifier.Proxies, handler)
 	if s.Metrics != nil {
 		handler = WithMetrics(s.Metrics, handler)
 	}
@@ -67,6 +69,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.WithValue(r.Context(), pathKey{}, pathParts{bucket: bucket, key: key})
 	r = r.WithContext(ctx)
+	noteTarget(ctx, bucket, key)
 
 	switch {
 	case bucket == "":

@@ -23,6 +23,7 @@ import (
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/console"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/logs"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/metrics"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/s3api"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
@@ -70,7 +71,15 @@ func run() error {
 		return err
 	}
 
-	log := newLogger(cfg)
+	// The sink is created before the logger, because the logger tees warnings
+	// and errors into it. Nothing is written until the database is reachable
+	// and the flusher starts; entries buffer in the meantime.
+	logSink := logs.New(nodeName(), logs.Policy{
+		SampleRate:    cfg.LogSampleRate,
+		SlowThreshold: time.Duration(cfg.LogSlowRequestMS) * time.Millisecond,
+	})
+
+	log := newLogger(cfg, logSink)
 	slog.SetDefault(log)
 
 	log.Info("starting s3d",
@@ -130,6 +139,7 @@ func run() error {
 		PublicURL: cfg.PublicS3URL,
 		S3Domain:  cfg.S3Domain,
 		Metrics:   collector,
+		Logs:      logSink,
 		Verifier: &s3api.Verifier{
 			Region:  cfg.S3Region,
 			Proxies: proxies,
@@ -183,6 +193,7 @@ func run() error {
 		Region:        cfg.S3Region,
 		SessionSecret: cfg.SessionSecret,
 		Assets:        consoleAssets(log),
+		Logs:          logSink,
 		System: console.SystemInfo{
 			Version:           version,
 			NodeName:          nodeName(),
@@ -233,6 +244,9 @@ func run() error {
 	// Request counts are accumulated in memory and flushed on a ticker, so the
 	// request path never waits on the database to record a graph.
 	go collector.Run(ctx, pool, log)
+	// Request logs and captured server events flush on their own ticker, so
+	// neither the request path nor a log call waits on the database.
+	go logSink.Run(ctx, pool, log)
 
 	// serveErr carries the first listener failure. It is buffered so a failing
 	// goroutine never blocks on a shutdown that is already under way.
@@ -292,13 +306,21 @@ type namedServer struct {
 	server *http.Server
 }
 
-func newLogger(cfg *config.Config) *slog.Logger {
+func newLogger(cfg *config.Config, sink *logs.Sink) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: cfg.LogLevel}
+
 	// Human-readable text locally, JSON in production where logs are collected.
+	var handler slog.Handler
 	if cfg.Env == config.Development {
-		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
 	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+
+	// Warnings and errors are also persisted, so the console can explain the
+	// things that are not requests: a failed email send, a blob that could not
+	// be reclaimed. Stdout keeps everything either way.
+	return slog.New(logs.NewHandler(handler, sink))
 }
 
 // warnIfNoCredentials points out a server nobody can actually use. A fresh
