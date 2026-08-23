@@ -85,6 +85,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("ETag", quoteETag(blob.ETag))
+	writeVersionHeaders(w, object.VersionID)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -152,9 +153,37 @@ func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request) {
 	}
 	key := keyOf(r)
 
-	if _, err := db.DeleteObject(r.Context(), s.DB, bucket.ID, key, s.writeOptions(r, bucket)); err != nil {
+	// Naming a version deletes that one permanently — the only operation that
+	// destroys data on a versioned bucket, and also how a delete is undone,
+	// since removing a delete marker promotes whatever was beneath it.
+	if versionID := requestedVersionID(r); versionID != "" {
+		deletion, err := db.DeleteObjectVersion(r.Context(), s.DB, bucket.ID, key, versionID)
+		switch {
+		case errors.Is(err, db.ErrVersionNotFound):
+			WriteError(w, r, ErrNoSuchVersion)
+			return
+		case err != nil:
+			s.internal(w, r, "delete object version", err)
+			return
+		}
+		if deletion.DeleteMarker {
+			w.Header().Set("x-amz-delete-marker", "true")
+		}
+		w.Header().Set("x-amz-version-id", versionID)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	deletion, err := db.DeleteObject(r.Context(), s.DB, bucket.ID, key, s.writeOptions(r, bucket))
+	if err != nil {
 		s.internal(w, r, "delete object", err)
 		return
+	}
+	// On a versioned bucket the delete wrote a marker, and the client needs its
+	// id to undo the delete later.
+	if deletion.DeleteMarker {
+		w.Header().Set("x-amz-delete-marker", "true")
+		writeVersionHeaders(w, deletion.MarkerVersionID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -172,6 +201,30 @@ func (s *Server) lookupObject(w http.ResponseWriter, r *http.Request) (*db.Objec
 		return nil, false
 	}
 
+	// A request naming a version reads that one; otherwise it reads whatever
+	// is current. Both funnel through here, so GET and HEAD cannot disagree
+	// about which version they are describing.
+	if versionID := requestedVersionID(r); versionID != "" {
+		object, err := db.GetObjectVersion(r.Context(), s.DB, bucket.ID, key, versionID)
+		switch {
+		case errors.Is(err, db.ErrIsDeleteMarker):
+			// The version exists and has no body. S3 answers 405 rather than
+			// 404, which is how a client tells "deleted here" from "never
+			// existed" while walking a history.
+			w.Header().Set("x-amz-delete-marker", "true")
+			w.Header().Set("x-amz-version-id", versionID)
+			WriteError(w, r, ErrMethodNotAllowed)
+			return nil, false
+		case errors.Is(err, db.ErrVersionNotFound), errors.Is(err, db.ErrObjectNotFound):
+			WriteError(w, r, ErrNoSuchVersion)
+			return nil, false
+		case err != nil:
+			s.internal(w, r, "get object version", err)
+			return nil, false
+		}
+		return object, true
+	}
+
 	object, err := db.GetObject(r.Context(), s.DB, bucket.ID, key)
 	if errors.Is(err, db.ErrObjectNotFound) {
 		WriteError(w, r, ErrNoSuchKey)
@@ -186,6 +239,7 @@ func (s *Server) lookupObject(w http.ResponseWriter, r *http.Request) (*db.Objec
 
 // writeObjectHeaders sets the headers common to GET and HEAD.
 func writeObjectHeaders(w http.ResponseWriter, object *db.Object) {
+	writeVersionHeaders(w, object.VersionID)
 	w.Header().Set("ETag", quoteETag(object.ETag))
 	w.Header().Set("Content-Type", object.ContentType)
 	w.Header().Set("Last-Modified", formatHTTPTime(object.UpdatedAt))

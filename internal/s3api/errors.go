@@ -141,6 +141,14 @@ var (
 		Message:    "At least one of the preconditions you specified did not hold.",
 		HTTPStatus: http.StatusPreconditionFailed,
 	}
+	// Distinct from NoSuchKey: the key may well exist, and a client walking a
+	// history needs to know it named a version that does not rather than that
+	// the object is gone.
+	ErrNoSuchVersion = &APIError{
+		Code:       "NoSuchVersion",
+		Message:    "The version id specified does not match any version of this object.",
+		HTTPStatus: http.StatusNotFound,
+	}
 	ErrMethodNotAllowed = &APIError{
 		Code:       "MethodNotAllowed",
 		Message:    "The specified method is not allowed against this resource.",

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -368,5 +369,172 @@ print("batch delete: 1000 keys in one call")
 print("BOTO3 COMPATIBILITY OK")
 PY
 `)
+	t.Log(out)
+}
+
+// TestVersioningCompatibility drives the versioning surface with boto3.
+//
+// Versioning semantics are where a home-grown S3 implementation usually
+// diverges quietly: delete markers behave unlike anything in a plain object
+// store, and a listing that groups versions rather than interleaving them looks
+// right until a client walks it. Nothing but a real client checks this
+// convincingly.
+func TestVersioningCompatibility(t *testing.T) {
+	skipUnlessExternal(t)
+	endpoint := startExternalServer(t, "test_s3api_versioning")
+
+	out := runInContainer(t, "python:3.12-slim", endpoint, `
+set -e
+pip install --quiet boto3
+python3 - <<'PY'
+import os
+import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url=os.environ["S3_ENDPOINT"],
+    config=Config(signature_version="s3v4",
+                  s3={"addressing_style": "path"},
+                  retries={"max_attempts": 2}),
+)
+
+B = "versioned"
+s3.create_bucket(Bucket=B)
+
+# An object written before versioning was enabled. Real buckets are full of
+# these, and S3 gives them the literal version id "null".
+s3.put_object(Bucket=B, Key="preexisting", Body=b"old")
+
+status = s3.get_bucket_versioning(Bucket=B)
+assert "Status" not in status, f"a never-versioned bucket reported a status: {status}"
+print("== unversioned bucket omits Status ==")
+
+s3.put_bucket_versioning(Bucket=B, VersioningConfiguration={"Status": "Enabled"})
+assert s3.get_bucket_versioning(Bucket=B)["Status"] == "Enabled"
+print("== versioning enabled ==")
+
+# Three writes to one key.
+ids = []
+for body in (b"one", b"two", b"three"):
+    ids.append(s3.put_object(Bucket=B, Key="k", Body=body)["VersionId"])
+assert len(set(ids)) == 3, f"version ids were not distinct: {ids}"
+print("== three distinct version ids ==")
+
+# Every version is addressable, and still holds its own bytes.
+for version, body in zip(ids, (b"one", b"two", b"three")):
+    got = s3.get_object(Bucket=B, Key="k", VersionId=version)["Body"].read()
+    assert got == body, f"version {version} returned {got!r}, want {body!r}"
+print("== each version returns its own bytes ==")
+
+# The pre-existing object is the null version.
+listing = s3.list_object_versions(Bucket=B, Prefix="preexisting")
+assert listing["Versions"][0]["VersionId"] == "null", listing["Versions"][0]
+print("== pre-versioning object reports the null version ==")
+
+# Ordering: newest first within a key, exactly one IsLatest.
+listing = s3.list_object_versions(Bucket=B, Prefix="k")
+versions = listing["Versions"]
+assert [v["VersionId"] for v in versions] == list(reversed(ids)), \
+    f"versions not newest-first: {[v['VersionId'] for v in versions]} vs {list(reversed(ids))}"
+latest = [v for v in versions if v["IsLatest"]]
+assert len(latest) == 1 and latest[0]["VersionId"] == ids[-1], latest
+print("== versions ordered newest first, one marked latest ==")
+
+# A delete with no version id writes a marker. Nothing is removed.
+deleted = s3.delete_object(Bucket=B, Key="k")
+assert deleted.get("DeleteMarker") is True, f"delete did not report a marker: {deleted}"
+marker = deleted["VersionId"]
+
+try:
+    s3.get_object(Bucket=B, Key="k")
+    raise AssertionError("the object is still readable after a versioned delete")
+except ClientError as e:
+    assert e.response["Error"]["Code"] in ("NoSuchKey", "404"), e.response["Error"]
+
+# ...but the data is still there.
+assert s3.get_object(Bucket=B, Key="k", VersionId=ids[0])["Body"].read() == b"one"
+print("== delete wrote a marker and removed nothing ==")
+
+# The marker appears in the listing as a DeleteMarker, not a Version.
+listing = s3.list_object_versions(Bucket=B, Prefix="k")
+markers = listing.get("DeleteMarkers", [])
+assert any(m["VersionId"] == marker and m["IsLatest"] for m in markers), listing
+print("== the marker is listed as a delete marker and is latest ==")
+
+# Deleting the marker brings the object back. This is the behaviour with no
+# counterpart in a plain delete.
+s3.delete_object(Bucket=B, Key="k", VersionId=marker)
+assert s3.get_object(Bucket=B, Key="k")["Body"].read() == b"three"
+print("== deleting the marker restored the object ==")
+
+# Copying an old version over the key promotes it: the API way to restore.
+s3.copy_object(Bucket=B, Key="k",
+               CopySource={"Bucket": B, "Key": "k", "VersionId": ids[0]})
+assert s3.get_object(Bucket=B, Key="k")["Body"].read() == b"one"
+print("== copying an old version restored it as current ==")
+
+# Deleting a version by id destroys it for real.
+s3.delete_object(Bucket=B, Key="k", VersionId=ids[1])
+try:
+    s3.get_object(Bucket=B, Key="k", VersionId=ids[1])
+    raise AssertionError("a permanently deleted version is still readable")
+except ClientError as e:
+    assert e.response["Error"]["Code"] in ("NoSuchVersion", "NoSuchKey", "404"), e.response["Error"]
+print("== deleting a version by id destroyed it ==")
+
+# Paging, with a boundary that falls inside one key's history.
+for i in range(7):
+    s3.put_object(Bucket=B, Key="paged", Body=bytes([i]))
+
+seen, token = [], {}
+for _ in range(20):
+    page = s3.list_object_versions(Bucket=B, Prefix="paged", MaxKeys=2, **token)
+    seen += [v["VersionId"] for v in page.get("Versions", [])]
+    if not page["IsTruncated"]:
+        break
+    token = {"KeyMarker": page["NextKeyMarker"],
+             "VersionIdMarker": page["NextVersionIdMarker"]}
+assert len(seen) == 7, f"paged through {len(seen)} versions, want 7"
+assert len(set(seen)) == 7, "a version was returned on more than one page"
+print("== paged through a key's history without gaps or repeats ==")
+
+# Suspension keeps what exists and stops making more.
+s3.put_bucket_versioning(Bucket=B, VersioningConfiguration={"Status": "Suspended"})
+assert s3.get_bucket_versioning(Bucket=B)["Status"] == "Suspended"
+before = {v["VersionId"] for v in s3.list_object_versions(Bucket=B, Prefix="paged").get("Versions", [])}
+
+# The first suspended write takes the null id and becomes current. The version
+# that was current keeps its real id and is preserved, so the count goes up by
+# one — suspending stops new versions being made, it does not discard the one
+# it finds.
+s3.put_object(Bucket=B, Key="paged", Body=b"suspended-one")
+after = s3.list_object_versions(Bucket=B, Prefix="paged").get("Versions", [])
+ids = {v["VersionId"] for v in after}
+assert before <= ids, f"suspending lost versions: {before - ids}"
+assert "null" in ids, f"the suspended write did not take the null version: {ids}"
+latest = [v for v in after if v["IsLatest"]]
+assert len(latest) == 1 and latest[0]["VersionId"] == "null", latest
+print("== suspended write takes the null version and preserves the rest ==")
+
+# The second one replaces the null version rather than adding another. There
+# can only be one, which is the rule that makes suspension unsafe as a way to
+# pause history: the intermediate state is gone.
+s3.put_object(Bucket=B, Key="paged", Body=b"suspended-two")
+final = s3.list_object_versions(Bucket=B, Prefix="paged").get("Versions", [])
+assert len(final) == len(after), \
+    f"a second suspended write added a version instead of replacing: {len(after)} -> {len(final)}"
+assert sum(1 for v in final if v["VersionId"] == "null") == 1, final
+assert s3.get_object(Bucket=B, Key="paged")["Body"].read() == b"suspended-two"
+print("== a second suspended write replaced the null version ==")
+
+print("VERSIONING OK")
+PY
+`)
+
+	if !strings.Contains(out, "VERSIONING OK") {
+		t.Fatalf("versioning compatibility failed:\n%s", out)
+	}
 	t.Log(out)
 }

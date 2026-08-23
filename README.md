@@ -165,7 +165,14 @@ with signed and unsigned trailers. Presigned URLs for GET and PUT. SigV2 is
 refused, with an error saying how to fix the client.
 
 **Buckets** — create, delete, head, list, location, public read, CORS,
-lifecycle expiry, optional versioning.
+lifecycle expiry, versioning.
+
+**Versioning** — the full S3 surface: `PutBucketVersioning` and
+`GetBucketVersioning` with all three states, `ListObjectVersions` with delete
+markers interleaved in history order, and `?versionId` on GET, HEAD, DELETE,
+batch delete and as a copy source. A delete on a versioned bucket writes a
+delete marker rather than removing anything, and deleting that marker brings
+the object back.
 
 **Access keys** — scoped per key: which buckets, optionally narrowed to a
 prefix, and whether the key may read, write or delete. Keys are unrestricted

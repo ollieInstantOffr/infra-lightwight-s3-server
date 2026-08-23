@@ -126,6 +126,10 @@ func (s *Server) handleGetBucket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case query.Has("versioning"):
+		s.handleGetBucketVersioning(w, r, bucket)
+	case query.Has("versions"):
+		s.handleListObjectVersions(w, r, bucket)
 	case query.Has("location"):
 		// us-east-1 is reported as an empty constraint, matching S3.
 		value := s.Region

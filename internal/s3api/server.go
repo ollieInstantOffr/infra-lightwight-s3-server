@@ -109,6 +109,18 @@ func (s *Server) routeBucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ?versioning is a PUT on the bucket that configures it rather than
+	// creating it, so it is dispatched before the create path — and it is a
+	// configuration change, which needs write across the whole bucket rather
+	// than write on some prefix of it.
+	if r.Method == http.MethodPut && r.URL.Query().Has("versioning") {
+		if !s.permit(w, r, bucket, "", access{db.PermissionWrite, reachesEverything}) {
+			return
+		}
+		s.withBucket(w, r, s.handlePutBucketVersioning)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPut:
 		if !s.permit(w, r, bucket, "", createBucket) {
@@ -192,7 +204,7 @@ func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
 		if !s.permit(w, r, bucket, key, writeObject) {
 			return
 		}
-		sourceBucket, sourceKey, err := parseCopySource(source)
+		sourceBucket, sourceKey, _, err := parseCopySource(source)
 		if err != nil {
 			WriteError(w, r, err)
 			return

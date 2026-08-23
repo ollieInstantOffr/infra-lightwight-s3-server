@@ -388,26 +388,29 @@ func TestEtagWildcardMatching(t *testing.T) {
 }
 
 func TestParseCopySource(t *testing.T) {
-	cases := map[string]struct{ bucket, key string }{
-		"/bucket/key.txt":             {"bucket", "key.txt"},
-		"bucket/key.txt":              {"bucket", "key.txt"},
-		"/bucket/deep/nested/key.txt": {"bucket", "deep/nested/key.txt"},
-		"/bucket/with%20space.txt":    {"bucket", "with space.txt"},
-		"/bucket/key.txt?versionId=x": {"bucket", "key.txt"},
+	cases := map[string]struct{ bucket, key, version string }{
+		"/bucket/key.txt":             {"bucket", "key.txt", ""},
+		"bucket/key.txt":              {"bucket", "key.txt", ""},
+		"/bucket/deep/nested/key.txt": {"bucket", "deep/nested/key.txt", ""},
+		"/bucket/with%20space.txt":    {"bucket", "with space.txt", ""},
+		// The version id is no longer discarded: it names which version to copy,
+		// which is how a version is restored through the API.
+		"/bucket/key.txt?versionId=x": {"bucket", "key.txt", "x"},
 	}
 	for raw, want := range cases {
-		bucket, key, err := parseCopySource(raw)
+		bucket, key, version, err := parseCopySource(raw)
 		if err != nil {
 			t.Errorf("parseCopySource(%q) = error %v", raw, err)
 			continue
 		}
-		if bucket != want.bucket || key != want.key {
-			t.Errorf("parseCopySource(%q) = %q, %q; want %q, %q", raw, bucket, key, want.bucket, want.key)
+		if bucket != want.bucket || key != want.key || version != want.version {
+			t.Errorf("parseCopySource(%q) = %q, %q, %q; want %q, %q, %q",
+				raw, bucket, key, version, want.bucket, want.key, want.version)
 		}
 	}
 
 	for _, bad := range []string{"", "/", "bucket", "/bucket/", "/bucket"} {
-		if _, _, err := parseCopySource(bad); err == nil {
+		if _, _, _, err := parseCopySource(bad); err == nil {
 			t.Errorf("parseCopySource(%q) accepted a malformed source", bad)
 		}
 	}
