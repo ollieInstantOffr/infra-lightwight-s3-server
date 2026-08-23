@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api, type Credential, type CreatedCredential } from "../lib/api";
+import { api, type AccessScope, type Bucket, type Credential, type CreatedCredential } from "../lib/api";
+import { ScopeEditor, unrestrictedScope } from "../components/ScopeEditor";
 import { useApi } from "../lib/useApi";
 import { formatDate, formatRelative } from "../lib/format";
 import {
@@ -22,13 +23,18 @@ import {
   TextInput,
 } from "../components/ui";
 
-const columns = "grid-cols-[1.2fr_1.6fr_.9fr_.9fr_auto]";
+const columns = "grid-cols-[1.1fr_1.4fr_1.3fr_.8fr_.8fr_auto]";
 
 export function CredentialsPage() {
   const { data, error, loading, reload } = useApi<{ credentials: Credential[] }>("/api/credentials");
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<CreatedCredential | null>(null);
   const [revoking, setRevoking] = useState<Credential | null>(null);
+  const [scoping, setScoping] = useState<Credential | null>(null);
+  // Offered as a picker rather than a free-text field, since a rule naming a
+  // bucket that does not exist grants nothing to nobody.
+  const { data: bucketData } = useApi<{ buckets: Bucket[] }>("/api/buckets");
+  const bucketNames = bucketData?.buckets.map((bucket) => bucket.name) ?? [];
 
   return (
     <>
@@ -48,7 +54,7 @@ export function CredentialsPage() {
 
       <Card className="overflow-hidden">
         <TableHead
-          columns={["Label", "Access key id", "Created", "Last used", ""]}
+          columns={["Label", "Access key id", "Access", "Created", "Last used", ""]}
           className={columns}
         />
 
@@ -57,6 +63,7 @@ export function CredentialsPage() {
             <div key={index} className={`grid ${columns} gap-[10px] border-b border-line-row px-[18px] py-[13px]`}>
               <SkeletonLine width="60%" />
               <SkeletonLine width="80%" faint />
+              <SkeletonLine width="70%" faint />
               <SkeletonLine width={70} faint />
               <SkeletonLine width={54} faint />
               <span />
@@ -72,14 +79,18 @@ export function CredentialsPage() {
               {credential.revoked && <Tag tone="danger">revoked</Tag>}
             </span>
             <span className="truncate font-mono text-[12px] text-ink-muted">{credential.accessKeyId}</span>
+            <ScopeSummary scope={credential.scope} />
             <span className="text-[12.5px] text-ink-muted">{formatDate(credential.createdAt)}</span>
             <span className="text-[12.5px] text-ink-muted">{formatRelative(credential.lastUsedAt)}</span>
             <span className="flex justify-end gap-[2px]">
               <CopyButton text={credential.accessKeyId} />
               {!credential.revoked && (
-                <RowAction danger onClick={() => setRevoking(credential)}>
-                  Revoke
-                </RowAction>
+                <>
+                  <RowAction onClick={() => setScoping(credential)}>Access</RowAction>
+                  <RowAction danger onClick={() => setRevoking(credential)}>
+                    Revoke
+                  </RowAction>
+                </>
               )}
             </span>
           </TableRow>
@@ -100,10 +111,23 @@ export function CredentialsPage() {
 
       {creating && (
         <CreateKeyModal
+          buckets={bucketNames}
           onClose={() => setCreating(false)}
           onCreated={(credential) => {
             setCreating(false);
             setCreated(credential);
+            reload();
+          }}
+        />
+      )}
+
+      {scoping && (
+        <ScopeModal
+          credential={scoping}
+          buckets={bucketNames}
+          onClose={() => setScoping(null)}
+          onSaved={() => {
+            setScoping(null);
             reload();
           }}
         />
@@ -207,11 +231,14 @@ function NewSecret({
 function CreateKeyModal({
   onClose,
   onCreated,
+  buckets,
 }: {
   onClose: () => void;
   onCreated: (credential: CreatedCredential) => void;
+  buckets: string[];
 }) {
   const [description, setDescription] = useState("");
+  const [scope, setScope] = useState<AccessScope>(unrestrictedScope());
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -220,7 +247,7 @@ function CreateKeyModal({
     setSaving(true);
     setError(null);
     try {
-      onCreated(await api.post<CreatedCredential>("/api/credentials", { description }));
+      onCreated(await api.post<CreatedCredential>("/api/credentials", { description, scope }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create the key.");
       setSaving(false);
@@ -236,6 +263,9 @@ function CreateKeyModal({
         >
           <TextInput value={description} onChange={setDescription} placeholder="ci-deploy" autoFocus />
         </Field>
+
+        <ScopeEditor scope={scope} onChange={setScope} buckets={buckets} />
+
         <InfoNotice>
           The secret is shown once and stored encrypted. If it is lost, revoke the key and create
           another — there is no way to recover it.
@@ -290,6 +320,83 @@ function RevokeModal({
           </Button>
         </div>
       </div>
+    </Modal>
+  );
+}
+
+/**
+ * A key's access, at a glance.
+ *
+ * The unrestricted case is called out rather than left blank, because a list
+ * where the widest keys look like the narrowest ones defeats the purpose of
+ * being able to audit it.
+ */
+function ScopeSummary({ scope }: { scope: AccessScope }) {
+  if (scope.unrestricted) {
+    return (
+      <span className="flex min-w-0 items-center">
+        <Tag tone="warn">full access</Tag>
+      </span>
+    );
+  }
+  if (scope.rules.length === 0) {
+    return (
+      <span className="flex min-w-0 items-center">
+        <Tag tone="neutral">no access</Tag>
+      </span>
+    );
+  }
+  return (
+    <span className="truncate text-[12px] text-ink-muted" title={scope.summary}>
+      {scope.summary}
+    </span>
+  );
+}
+
+function ScopeModal({
+  credential,
+  buckets,
+  onClose,
+  onSaved,
+}: {
+  credential: Credential;
+  buckets: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [scope, setScope] = useState<AccessScope>(credential.scope);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      await api.put(`/api/credentials/${credential.accessKeyId}/scope`, { scope });
+      onSaved();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not change the access.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={`Access for ${credential.description || credential.accessKeyId}`} onClose={onClose}>
+      <form className="space-y-[16px]" onSubmit={submit}>
+        <ScopeEditor scope={scope} onChange={setScope} buckets={buckets} />
+        <InfoNotice>
+          The secret does not change, so whatever is using this key keeps working — with whatever
+          access you leave it. It takes effect on the next request.
+        </InfoNotice>
+        {error && <ErrorNotice message={error} />}
+        <div className="flex justify-end gap-[8px]">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" disabled={saving}>
+            {saving ? "Saving…" : "Save access"}
+          </Button>
+        </div>
+      </form>
     </Modal>
   );
 }

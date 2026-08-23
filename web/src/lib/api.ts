@@ -118,6 +118,30 @@ export type ObjectListing = {
   nextAfter: string;
 };
 
+export type Permission = "read" | "write" | "delete";
+
+export type ScopeRule = {
+  bucket: string;
+  prefix: string;
+  permissions: Permission[];
+};
+
+/**
+ * What one access key may do.
+ *
+ * `unrestricted` is kept separate from a rule covering everything, so a key
+ * that was never scoped looks different from one deliberately scoped wide.
+ * `summary` is rendered by the server, so the console, the audit log and the
+ * request log all describe a scope in the same words.
+ */
+export type AccessScope = {
+  unrestricted: boolean;
+  rules: ScopeRule[];
+  summary: string;
+};
+
+export const ALL_PERMISSIONS: Permission[] = ["read", "write", "delete"];
+
 export type Credential = {
   accessKeyId: string;
   description: string;
@@ -125,6 +149,7 @@ export type Credential = {
   lastUsedAt: string | null;
   revoked: boolean;
   revokedAt: string | null;
+  scope: AccessScope;
 };
 
 export type CreatedCredential = {
@@ -133,6 +158,7 @@ export type CreatedCredential = {
   description: string;
   endpoint: string;
   region: string;
+  scope: AccessScope;
   warning: string;
   snippets: Record<string, string>;
 };

@@ -91,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/credentials", s.requireAdmin(s.handleListCredentials))
 	mux.HandleFunc("POST /api/credentials", s.requireAdmin(s.handleCreateCredential))
 	mux.HandleFunc("DELETE /api/credentials/{accessKeyId}", s.requireAdmin(s.handleRevokeCredential))
+	mux.HandleFunc("PUT /api/credentials/{accessKeyId}/scope", s.requireAdmin(s.handleSetCredentialScope))
 
 	// Buckets and objects.
 	mux.HandleFunc("GET /api/buckets", s.requireSession(s.handleListBuckets))

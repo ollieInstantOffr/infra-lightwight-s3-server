@@ -167,6 +167,11 @@ refused, with an error saying how to fix the client.
 **Buckets** — create, delete, head, list, location, public read, CORS,
 lifecycle expiry, optional versioning.
 
+**Access keys** — scoped per key: which buckets, optionally narrowed to a
+prefix, and whether the key may read, write or delete. Keys are unrestricted
+unless narrowed, so nothing changes until you choose to. A scoped key sees only
+the buckets it can use, and listing a bucket shows only its own prefix.
+
 **Console** — passwordless sign-in, an object browser with previews and
 drag-and-drop upload, access keys, users and invitations, version history with
 restore, an audit log, request metrics, and a system health screen.
@@ -177,6 +182,11 @@ Object locking, replication, storage classes, requester-pays, ACLs (buckets are
 either private or public read), server-side encryption, bucket policies, and
 event notifications. Some of these would be reasonable to add; none of them are
 faked.
+
+Access keys are scoped, but there is no policy language: a key names buckets and
+prefixes and holds read, write or delete on them. That covers giving one
+application access to one bucket, which is what the absence of scoping actually
+cost. It does not cover conditions, deny rules, or anything else IAM does.
 
 ---
 

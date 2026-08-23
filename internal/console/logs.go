@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
@@ -133,6 +134,15 @@ func likelyCause(g db.ErrorBreakdown) string {
 	case "SignatureDoesNotMatch":
 		return "Usually a wrong secret key, or a reverse proxy not forwarding the original host — SigV4 signs the hostname, so a mismatch there fails every request."
 	case "AccessDenied":
+		// AccessDenied now has two quite different causes, and telling them
+		// apart matters more than either message. Sending someone to check
+		// their client's credentials when the real answer is that they scoped
+		// the key too narrowly wastes exactly the time this screen exists to
+		// save. The recorded reason is what separates them.
+		if strings.Contains(g.Reason, "not permitted") {
+			return "The key is valid, but its access does not cover this. Open Access keys, find the key, and widen it — or point the client at somewhere inside its scope. " +
+				"The reason column names the bucket and the permission it wanted."
+		}
 		return "The request carried no signature at all. Either the client is not configured with credentials, or it is addressing a bucket that is not public."
 	case "NoSuchBucket":
 		return "The bucket does not exist. A client using virtual-host addressing against a server without wildcard DNS produces this, as the bucket name never reaches the server."
