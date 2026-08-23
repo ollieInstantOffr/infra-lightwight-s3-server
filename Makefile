@@ -97,7 +97,10 @@ docker: ## Build the container image
 
 .PHONY: up
 up: ## Start the stack with docker compose
-	docker compose up -d --build
+	# VERSION is passed explicitly: compose reads it from the environment and
+	# defaults to "dev", and it cannot run git describe for itself. Without
+	# this the console shows dev on a perfectly well tagged checkout.
+	VERSION="$(VERSION)" docker compose up -d --build
 
 .PHONY: down
 down: ## Stop the stack

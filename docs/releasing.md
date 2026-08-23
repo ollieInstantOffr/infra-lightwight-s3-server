@@ -86,6 +86,27 @@ Nothing else derives the version. The Makefile and Dockerfile both read
 `git describe`, so an untagged build reports a commit hash — which is correct,
 and is why the console shows `dev` rather than a number on a working tree.
 
+### If the console says `dev` on a tagged checkout
+
+The version is stamped into the binary at build time, and Docker Compose cannot
+run `git describe` for itself — it reads `VERSION` from the environment and
+falls back to `dev`. So this shows `dev` however well tagged the checkout is:
+
+```bash
+docker compose up -d --build
+```
+
+Use `make up`, or `setup.sh`, both of which pass it in. To build with compose
+directly:
+
+```bash
+VERSION=$(git describe --tags --always --dirty) docker compose up -d --build
+```
+
+A `-dirty` suffix means the working tree has uncommitted changes. That is
+informative rather than a problem — it says the running binary does not
+correspond to any commit.
+
 ## Patching quickly
 
 A patch release exists mostly for security, and its value is entirely in how

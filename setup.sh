@@ -391,7 +391,11 @@ start_stack() {
   muted "The first build compiles the console and the server, and takes a few minutes."
   printf '\n'
 
-  "${COMPOSE[@]}" up -d --build || fail "The stack failed to start. Check the output above."
+  # The version is stamped into the binary at build time from the git tag.
+  # Compose cannot work it out for itself, so it is passed in here; without it
+  # the build falls back to "dev" and the console shows that.
+  VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
+    "${COMPOSE[@]}" up -d --build || fail "The stack failed to start. Check the output above."
 
   printf '\n'
   info "Waiting for the server to become healthy…"
