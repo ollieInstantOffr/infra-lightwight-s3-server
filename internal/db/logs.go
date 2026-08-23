@@ -317,3 +317,26 @@ func surfaceOrDefault(s string) string {
 	}
 	return "s3"
 }
+
+// ListRequestLogsSince returns entries newer than an id, for the live tail.
+//
+// A separate function rather than a filter field: the tail asks "what is new",
+// which is the opposite direction to the viewer's "what came before", and
+// conflating them in one query made the ordering confusing.
+func ListRequestLogsSince(ctx context.Context, q Querier, filter LogFilter, afterID int64) ([]RequestLog, error) {
+	filter.Before = 0
+	entries, err := ListRequestLogs(ctx, q, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filtering in Go rather than SQL keeps one query and one filter builder.
+	// The page is at most a few hundred rows, so the cost is nil.
+	fresh := make([]RequestLog, 0, len(entries))
+	for _, e := range entries {
+		if e.ID > afterID {
+			fresh = append(fresh, e)
+		}
+	}
+	return fresh, nil
+}

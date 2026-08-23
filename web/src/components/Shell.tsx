@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useSession } from "../lib/session";
 import { useApi } from "../lib/useApi";
-import type { Dashboard } from "../lib/api";
+import { ALERTS_CHANGED, api } from "../lib/api";
+import type { AlertPage, Dashboard } from "../lib/api";
 import { formatBytes } from "../lib/format";
 import { ProgressBar } from "./ui";
 import { CommandPalette } from "./CommandPalette";
@@ -12,7 +13,7 @@ import { CommandPalette } from "./CommandPalette";
 // grouped by what it concerns, disk usage pinned to the bottom, and the
 // signed-in user beneath that.
 
-type NavItem = { to: string; label: string; adminOnly?: boolean; end?: boolean };
+type NavItem = { to: string; label: string; adminOnly?: boolean; end?: boolean; badge?: "alerts" };
 type NavGroup = { heading: string; items: NavItem[] };
 
 const groups: NavGroup[] = [
@@ -35,6 +36,8 @@ const groups: NavGroup[] = [
     heading: "Node",
     items: [
       { to: "/system", label: "System & health" },
+      { to: "/logs", label: "Logs" },
+      { to: "/alerts", label: "Alerts", badge: "alerts" },
       { to: "/audit", label: "Audit log", adminOnly: true },
     ],
   },
@@ -44,6 +47,25 @@ export function Shell({ children }: { children: ReactNode }) {
   const { user, signOut } = useSession();
   const navigate = useNavigate();
   const { data: dashboard } = useApi<Dashboard>("/api/dashboard");
+  const [alerts, setAlerts] = useState<AlertPage | null>(null);
+
+  // Polled rather than pushed: the badge is the one thing that has to be right
+  // without the operator being on the alerts screen, and a minute of latency
+  // on a condition that took a minute to evaluate is not worth a connection.
+  useEffect(() => {
+    const load = () =>
+      api
+        .get<AlertPage>("/api/alerts")
+        .then(setAlerts)
+        .catch(() => undefined);
+    void load();
+    const timer = window.setInterval(load, 60_000);
+    window.addEventListener(ALERTS_CHANGED, load);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener(ALERTS_CHANGED, load);
+    };
+  }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
 
@@ -111,14 +133,19 @@ export function Shell({ children }: { children: ReactNode }) {
                     end={item.end}
                     onClick={() => setRailOpen(false)}
                     className={({ isActive }) =>
-                      `block rounded-[9px] px-[10px] py-[8px] text-[13px] font-medium transition-colors ${
+                      `flex items-center justify-between rounded-[9px] px-[10px] py-[8px] text-[13px] font-medium transition-colors ${
                         isActive
                           ? "bg-accent-soft text-accent-deep"
                           : "text-ink-label hover:bg-inset hover:text-ink"
                       }`
                     }
                   >
-                    {item.label}
+                    <span>{item.label}</span>
+                    {item.badge === "alerts" && (alerts?.firing ?? 0) > 0 && (
+                      <span className="ml-[6px] rounded-full bg-danger px-[6px] py-[1px] text-[10px] font-bold text-white">
+                        {alerts?.firing}
+                      </span>
+                    )}
                   </NavLink>
                 ))}
               </div>

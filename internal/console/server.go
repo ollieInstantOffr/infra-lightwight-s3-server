@@ -39,6 +39,8 @@ type Server struct {
 	Assets http.Handler
 	// Logs receives completed console requests. Optional.
 	Logs RequestRecorder
+	// Sink exposes the sampling policy so it can be adjusted at runtime.
+	Sink LogSink
 
 	// AdminEmail is the bootstrap administrator, shown on the first-run screen
 	// so a fresh install says which address can sign in.
@@ -119,6 +121,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/account/sessions", s.requireSession(s.handleListSessions))
 	mux.HandleFunc("DELETE /api/account/sessions/{id}", s.requireSession(s.handleRevokeSession))
 	mux.HandleFunc("POST /api/account/sessions/revoke-others", s.requireSession(s.handleRevokeOtherSessions))
+
+	// Logs and alerts.
+	mux.HandleFunc("GET /api/logs", s.requireSession(s.handleListLogs))
+	mux.HandleFunc("GET /api/logs/summary", s.requireSession(s.handleLogSummary))
+	mux.HandleFunc("GET /api/logs/events", s.requireSession(s.handleServerEvents))
+	mux.HandleFunc("GET /api/logs/stream", s.requireSession(s.handleLogStream))
+	mux.HandleFunc("GET /api/logs/settings", s.requireAdmin(s.handleLogSettings))
+	mux.HandleFunc("PUT /api/logs/settings", s.requireAdmin(s.handleUpdateLogSettings))
+
+	mux.HandleFunc("GET /api/alerts", s.requireSession(s.handleListAlerts))
+	mux.HandleFunc("POST /api/alerts/{id}/acknowledge", s.requireSession(s.handleAcknowledgeAlert))
+	mux.HandleFunc("POST /api/alerts/{id}/resolve", s.requireSession(s.handleResolveAlert))
+	mux.HandleFunc("GET /api/alerts/rules", s.requireAdmin(s.handleListAlertRules))
+	mux.HandleFunc("PUT /api/alerts/rules/{id}", s.requireAdmin(s.handleUpdateAlertRule))
 
 	// Whether the console has ever been used, so the app can show the first-run
 	// screen instead of an unexplained sign-in form. Unauthenticated by
@@ -282,3 +298,6 @@ func (s *Server) internalError(w http.ResponseWriter, r *http.Request, operation
 		"operation", operation, "method", r.Method, "path", r.URL.Path, "error", err)
 	writeError(w, http.StatusInternalServerError, "Something went wrong. Please try again.")
 }
+
+// jsonBytes encodes a value for a server-sent event frame.
+func jsonBytes(value any) ([]byte, error) { return json.Marshal(value) }

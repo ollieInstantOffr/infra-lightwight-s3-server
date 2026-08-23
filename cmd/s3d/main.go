@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/alerts"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/config"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/console"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
@@ -194,6 +195,7 @@ func run() error {
 		SessionSecret: cfg.SessionSecret,
 		Assets:        consoleAssets(log),
 		Logs:          logSink,
+		Sink:          logSink,
 		System: console.SystemInfo{
 			Version:           version,
 			NodeName:          nodeName(),
@@ -204,6 +206,12 @@ func run() error {
 			ResendConfigured:  cfg.ResendConfigured(),
 			Environment:       string(cfg.Env),
 		},
+	}
+
+	// Alert rules are seeded on every start, preserving any thresholds or
+	// enablement an operator has changed.
+	if err := alerts.SeedRules(startupCtx, pool); err != nil {
+		return fmt.Errorf("seed alert rules: %w", err)
 	}
 
 	warnIfNoCredentials(startupCtx, pool, log)
@@ -247,6 +255,13 @@ func run() error {
 	// Request logs and captured server events flush on their own ticker, so
 	// neither the request path nor a log call waits on the database.
 	go logSink.Run(ctx, pool, log)
+
+	// Alerts evaluate against the metrics and logs already being collected, so
+	// this adds queries on a one-minute ticker rather than any new bookkeeping.
+	alertEngine := &alerts.Engine{
+		Pool: pool, Blobs: blobs, Log: log, Notifier: consoleServer,
+	}
+	go alertEngine.Run(ctx)
 
 	// serveErr carries the first listener failure. It is buffered so a failing
 	// goroutine never blocks on a shutdown that is already under way.

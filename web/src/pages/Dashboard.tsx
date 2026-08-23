@@ -69,9 +69,19 @@ export function DashboardPage() {
           label="Requests (24h)"
           value={traffic.data ? compactNumber(traffic.data.requests24h) : null}
           hint={
-            traffic.data
-              ? `${(traffic.data.errorRate * 100).toFixed(2)}% errors`
-              : "counting…"
+            traffic.data ? (
+              traffic.data.errorRate > 0 ? (
+                // One click from "a lot of errors" to "which ones and why",
+                // which is the whole point of the log.
+                <Link to="/logs?errors=1&since=1440" className="text-danger underline underline-offset-2">
+                  {(traffic.data.errorRate * 100).toFixed(2)}% errors
+                </Link>
+              ) : (
+                "no errors"
+              )
+            ) : (
+              "counting…"
+            )
           }
         />
       </div>
@@ -160,7 +170,15 @@ export function DashboardPage() {
   );
 }
 
-function Stat({ label, value, hint }: { label: string; value: string | null; hint: string }) {
+function Stat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string | null;
+  hint: React.ReactNode;
+}) {
   return (
     <Card className="px-[17px] py-[16px]">
       <div className="mb-[9px] text-[11.5px] text-ink-muted">{label}</div>

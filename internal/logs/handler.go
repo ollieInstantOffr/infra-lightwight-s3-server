@@ -25,6 +25,12 @@ import (
 type Handler struct {
 	inner slog.Handler
 	sink  *Sink
+
+	// skip is set when Skip() was bound through With rather than passed on
+	// the record. Without it a logger built once per request and reused would
+	// look unmarked at Handle time, and every record it wrote would be
+	// persisted as a server event — the exact flooding Skip exists to stop.
+	skip bool
 }
 
 // NewHandler wraps a handler so warn-and-above is also persisted.
@@ -45,7 +51,7 @@ const SkipKey = "__request_scoped"
 func Skip() slog.Attr { return slog.Bool(SkipKey, true) }
 
 func (h *Handler) Handle(ctx context.Context, record slog.Record) error {
-	if record.Level >= slog.LevelWarn {
+	if record.Level >= slog.LevelWarn && !h.skip {
 		attributes := make(map[string]any, record.NumAttrs())
 		requestScoped := false
 		record.Attrs(func(attr slog.Attr) bool {
@@ -79,11 +85,17 @@ func (h *Handler) Handle(ctx context.Context, record slog.Record) error {
 }
 
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &Handler{inner: h.inner.WithAttrs(attrs), sink: h.sink}
+	skip := h.skip
+	for _, attr := range attrs {
+		if attr.Key == SkipKey {
+			skip = true
+		}
+	}
+	return &Handler{inner: h.inner.WithAttrs(attrs), sink: h.sink, skip: skip}
 }
 
 func (h *Handler) WithGroup(name string) slog.Handler {
-	return &Handler{inner: h.inner.WithGroup(name), sink: h.sink}
+	return &Handler{inner: h.inner.WithGroup(name), sink: h.sink, skip: h.skip}
 }
 
 func nonZeroTime(t time.Time) time.Time {

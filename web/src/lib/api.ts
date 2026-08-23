@@ -262,6 +262,101 @@ export type SearchResults = {
   byPrefix: boolean;
 };
 
+export type LogEntry = {
+  id: number;
+  at: string;
+  requestId: string;
+  surface: "s3" | "console";
+  method: string;
+  bucket: string;
+  key: string;
+  path: string;
+  status: number;
+  errorCode: string;
+  reason: string;
+  bytesIn: number;
+  bytesOut: number;
+  durationMs: number;
+  accessKeyId: string;
+  actor: string;
+  clientIp: string;
+  userAgent: string;
+  sampled: boolean;
+};
+
+export type LogPage = { logs: LogEntry[]; nextBefore: number | null };
+
+export type ErrorGroup = {
+  errorCode: string;
+  reason: string;
+  bucket: string;
+  accessKeyId: string;
+  clientIp: string;
+  count: number;
+  lastSeen: string;
+  /** Named only where the pattern has one sensible reading. */
+  likelyCause: string;
+};
+
+export type LogSummary = { groups: ErrorGroup[]; windowMinutes: number };
+
+export type ServerEvent = {
+  id: number;
+  at: string;
+  level: "WARN" | "ERROR";
+  message: string;
+  attributes: Record<string, unknown> | null;
+  node: string;
+};
+
+export type LogSettings = {
+  sampleRate: number;
+  slowThresholdMs: number;
+  requestRows: number;
+  eventRows: number;
+  bytes: number;
+  note: string;
+};
+
+export type Alert = {
+  id: number;
+  rule: string;
+  ruleName: string;
+  state: "firing" | "acknowledged" | "resolved";
+  severity: "info" | "warning" | "critical";
+  summary: string;
+  guidance: string;
+  detail: Record<string, unknown> | null;
+  firedAt: string;
+  lastSeenAt: string;
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
+  resolvedAt: string | null;
+};
+
+export type AlertPage = { alerts: Alert[]; firing: number; acknowledged: number };
+
+export type AlertRule = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  severity: "info" | "warning" | "critical";
+  settings: Record<string, number> | null;
+  updatedAt: string;
+};
+
+/**
+ * Fired when something changes the alert set, so the sidebar badge updates on
+ * the action rather than on its next poll. Acknowledging an alert and watching
+ * the badge stay red for a minute reads as a broken button.
+ */
+export const ALERTS_CHANGED = "pail:alerts-changed";
+
+export function alertsChanged(): void {
+  window.dispatchEvent(new Event(ALERTS_CHANGED));
+}
+
 export type SetupState = {
   configured: boolean;
   adminEmail: string;
