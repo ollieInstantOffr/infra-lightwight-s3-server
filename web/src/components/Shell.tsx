@@ -4,6 +4,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useSession } from "../lib/session";
 import { useApi } from "../lib/useApi";
 import { ALERTS_CHANGED, api } from "../lib/api";
+import { Logo } from "./Logo";
 import type { AlertPage, Dashboard } from "../lib/api";
 import { formatBytes } from "../lib/format";
 import { ProgressBar } from "./ui";
@@ -108,9 +109,7 @@ export function Shell({ children }: { children: ReactNode }) {
         }`}
       >
         <div className="flex items-center gap-[9px] px-[6px]">
-          <div className="flex size-[26px] flex-none items-center justify-center rounded-[8px] bg-accent font-mono text-[12px] font-semibold text-on-accent">
-            P
-          </div>
+          <Logo size={26} className="flex-none" />
           <span className="text-[14px] font-semibold tracking-[-0.01em]">Pail</span>
           <span className="ml-auto rounded-[6px] border border-line bg-well px-[6px] py-[3px] font-mono text-[9.5px] font-medium text-ink-muted">
             {dashboard ? "on" : "…"}

@@ -40,6 +40,9 @@
   --color-accent-deep: #1c5e48;
   --color-on-accent: #052018;
   --color-accent-wash: #dcece6;
+  /* The lighter accent from the brand palette. Used by the logo mark, where
+     the top bar has to separate from the one below it at 16px. */
+  --color-accent-light: #7fd3b1;
 
   /* Status */
   --color-danger: #c0392b;

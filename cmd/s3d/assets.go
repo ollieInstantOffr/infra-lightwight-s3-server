@@ -3,11 +3,20 @@ package main
 import (
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/web"
 )
+
+func init() {
+	// Go's table does not carry this one, and without it the manifest is
+	// sniffed as plain text. Browsers are lenient about that, but a manifest
+	// served as text/plain is the sort of thing that works until one of them
+	// decides it should not.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 // consoleAssets serves the built single-page app from inside the binary.
 //

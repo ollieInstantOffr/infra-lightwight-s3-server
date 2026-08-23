@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api, type SetupState } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Button, Card, ErrorNotice, Field, InfoNotice, Spinner, TextInput } from "../components/ui";
+import { Logo } from "../components/Logo";
 
 // The reasons the callback can send someone back with. Each becomes a sentence
 // saying what to do next; "error=expired" on its own helps nobody.
@@ -57,9 +58,7 @@ export function SignInPage() {
     <div className="flex min-h-full items-center justify-center px-4 py-[8vh]">
       <div className="w-full max-w-[400px]">
         <div className="mb-[26px] flex items-center gap-[10px]">
-          <div className="flex size-[30px] items-center justify-center rounded-[9px] bg-accent font-mono text-[13px] font-semibold text-on-accent">
-            P
-          </div>
+          <Logo size={30} />
           <span className="text-[16px] font-semibold tracking-[-0.01em]">Pail</span>
         </div>
 
