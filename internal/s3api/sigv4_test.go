@@ -302,8 +302,8 @@ func TestVerifyRejectsClockSkew(t *testing.T) {
 func TestVerifyRejectsUnknownAccessKey(t *testing.T) {
 	v := awsVectors()[0]
 	verifier := testVerifier(t, exampleTime(t))
-	verifier.Lookup = func(_ context.Context, _ string) (string, error) {
-		return "", errNoSuchKey
+	verifier.Lookup = func(_ context.Context, _ string) (KeyMaterial, error) {
+		return KeyMaterial{}, errNoSuchKey
 	}
 
 	r := httptest.NewRequest(v.method, v.target, nil)

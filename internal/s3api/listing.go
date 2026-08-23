@@ -53,8 +53,14 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 		return
 	}
 
+	// What this caller is allowed to see in this bucket. A key scoped to a
+	// prefix lists the bucket and sees only its own prefix, rather than being
+	// refused — see the note in authorize.go.
+	limit := listingLimitFor(r, bucket.Name)
+	requestedPrefix := query.Get("prefix")
+
 	opts := db.ListOptions{
-		Prefix:    query.Get("prefix"),
+		Prefix:    limit.narrow(requestedPrefix),
 		Delimiter: query.Get("delimiter"),
 		MaxKeys:   maxKeys,
 	}
@@ -98,9 +104,12 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 	}
 
 	response := ListBucketResult{
-		Xmlns:       s3Namespace,
-		Name:        bucket.Name,
-		Prefix:      encode(opts.Prefix),
+		Xmlns: s3Namespace,
+		Name:  bucket.Name,
+		// The prefix the client asked for, not the one actually scanned.
+		// Echoing a narrowed prefix back would tell a scoped key what its own
+		// scope is, and would confuse any client that compares the two.
+		Prefix:      encode(requestedPrefix),
 		Delimiter:   encode(opts.Delimiter),
 		MaxKeys:     maxKeys,
 		IsTruncated: result.IsTruncated,
@@ -110,7 +119,15 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 		response.EncodingType = "url"
 	}
 
+	// Filtered after the scan rather than before it. A page may come back
+	// shorter than max-keys as a result, which S3 permits — max-keys is a
+	// maximum. The truncation state and the continuation token are left exactly
+	// as the database reported them, so pagination still resumes at the right
+	// key and a filtered page cannot cause the client to skip anything.
 	for _, object := range result.Objects {
+		if !limit.allowsKey(object.Key) {
+			continue
+		}
 		response.Contents = append(response.Contents, ObjectEntry{
 			Key:          encode(object.Key),
 			LastModified: formatXMLTime(object.UpdatedAt),
@@ -120,6 +137,9 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 		})
 	}
 	for _, prefix := range result.CommonPrefixes {
+		if !limit.allowsCommonPrefix(prefix) {
+			continue
+		}
 		response.CommonPrefixes = append(response.CommonPrefixes, CommonPrefix{Prefix: encode(prefix)})
 	}
 	response.KeyCount = len(response.Contents) + len(response.CommonPrefixes)

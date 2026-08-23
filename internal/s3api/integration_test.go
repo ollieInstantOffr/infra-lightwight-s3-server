@@ -77,12 +77,12 @@ func newIntegrationServer(t *testing.T) (*s3.Client, *db.Pool) {
 		Verifier: &Verifier{
 			Region:  "us-east-1",
 			Proxies: trust,
-			Lookup: func(ctx context.Context, accessKeyID string) (string, error) {
+			Lookup: func(ctx context.Context, accessKeyID string) (KeyMaterial, error) {
 				c, err := db.LookupCredential(ctx, pool, cipher, accessKeyID)
 				if err != nil {
-					return "", err
+					return KeyMaterial{}, err
 				}
-				return c.SecretKey, nil
+				return KeyMaterial{SecretKey: c.SecretKey, Grant: c.Scope}, nil
 			},
 		},
 		Region: "us-east-1",
@@ -158,12 +158,12 @@ func newVirtualHostServer(t *testing.T, s3Domain string) *virtualHostServer {
 		DB: pool, Blobs: blobs, Log: quiet, Region: "us-east-1", S3Domain: s3Domain,
 		Verifier: &Verifier{
 			Region: "us-east-1", Proxies: trust,
-			Lookup: func(ctx context.Context, accessKeyID string) (string, error) {
+			Lookup: func(ctx context.Context, accessKeyID string) (KeyMaterial, error) {
 				c, err := db.LookupCredential(ctx, pool, cipher, accessKeyID)
 				if err != nil {
-					return "", err
+					return KeyMaterial{}, err
 				}
-				return c.SecretKey, nil
+				return KeyMaterial{SecretKey: c.SecretKey, Grant: c.Scope}, nil
 			},
 		},
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -64,11 +65,11 @@ func newSDKTestServer(t *testing.T) (*s3.Client, *captured, string) {
 	verifier := &Verifier{
 		Region:  "us-east-1",
 		Proxies: trust,
-		Lookup: func(_ context.Context, accessKeyID string) (string, error) {
+		Lookup: func(_ context.Context, accessKeyID string) (KeyMaterial, error) {
 			if accessKeyID != sdkAccessKeyID {
-				return "", errNoSuchKey
+				return KeyMaterial{}, errNoSuchKey
 			}
-			return sdkSecretKey, nil
+			return KeyMaterial{SecretKey: sdkSecretKey, Grant: db.UnrestrictedGrant()}, nil
 		},
 	}
 
@@ -305,11 +306,11 @@ func newTLSSDKTestServer(t *testing.T) (*s3.Client, *captured) {
 	verifier := &Verifier{
 		Region:  "us-east-1",
 		Proxies: trust,
-		Lookup: func(_ context.Context, accessKeyID string) (string, error) {
+		Lookup: func(_ context.Context, accessKeyID string) (KeyMaterial, error) {
 			if accessKeyID != sdkAccessKeyID {
-				return "", errNoSuchKey
+				return KeyMaterial{}, errNoSuchKey
 			}
-			return sdkSecretKey, nil
+			return KeyMaterial{SecretKey: sdkSecretKey, Grant: db.UnrestrictedGrant()}, nil
 		},
 	}
 

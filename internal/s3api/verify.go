@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
 )
 
@@ -20,7 +21,19 @@ import (
 // db.ErrCredentialNotFound or db.ErrCredentialRevoked for unusable keys; the
 // verifier treats both as ErrInvalidAccessKeyID so a client cannot tell a
 // revoked key from one that never existed.
-type SecretLookup func(ctx context.Context, accessKeyID string) (secretKey string, err error)
+type SecretLookup func(ctx context.Context, accessKeyID string) (KeyMaterial, error)
+
+// KeyMaterial is what the verifier needs about an access key: the secret to
+// check the signature with, and the grant to authorize the request against.
+//
+// Both come from one lookup deliberately. Fetching the grant separately would
+// mean a second query on the hottest path, and — worse — a window in which the
+// signature was checked against one version of a key and the permissions
+// against another.
+type KeyMaterial struct {
+	SecretKey string
+	Grant     db.Grant
+}
 
 // Verifier authenticates S3 requests.
 type Verifier struct {
@@ -37,6 +50,9 @@ type Verifier struct {
 // left off.
 type Identity struct {
 	AccessKeyID string
+	// Grant is what this key is allowed to do. It travels with the identity
+	// that was verified, so authorization cannot disagree with authentication.
+	Grant db.Grant
 	// PayloadHash is the literal x-amz-content-sha256 value, which may be a
 	// real digest or one of the streaming sentinels.
 	PayloadHash string
@@ -103,7 +119,7 @@ func (v *Verifier) Verify(ctx context.Context, r *http.Request) (*Identity, erro
 		return nil, fmt.Errorf("%w: host", ErrMissingSignedHeader)
 	}
 
-	secretKey, err := v.Lookup(ctx, auth.AccessKeyID)
+	material, err := v.Lookup(ctx, auth.AccessKeyID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidAccessKeyID, auth.AccessKeyID)
 	}
@@ -111,7 +127,7 @@ func (v *Verifier) Verify(ctx context.Context, r *http.Request) (*Identity, erro
 	payloadHash := payloadHashOf(r)
 	host := v.Proxies.Host(r)
 	query := canonicalQuery(r.URL.RawQuery, "")
-	signingKey := SigningKey(secretKey, auth.Scope)
+	signingKey := SigningKey(material.SecretKey, auth.Scope)
 
 	// S3 signs the path as transmitted and does not normalize it. canonicalURIs
 	// returns the faithful reading first and a re-encoded fallback second, for
@@ -123,6 +139,7 @@ func (v *Verifier) Verify(ctx context.Context, r *http.Request) (*Identity, erro
 			return &Identity{
 				AccessKeyID: auth.AccessKeyID,
 				PayloadHash: payloadHash,
+				Grant:       material.Grant,
 				signingKey:  signingKey,
 				scope:       auth.Scope,
 				timestamp:   timestamp.UTC().Format(iso8601),

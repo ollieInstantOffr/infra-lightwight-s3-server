@@ -110,7 +110,7 @@ func (v *Verifier) verifyPresigned(ctx context.Context, r *http.Request) (*Ident
 		return nil, fmt.Errorf("%w: host", ErrMissingSignedHeader)
 	}
 
-	secretKey, err := v.Lookup(ctx, credential.accessKeyID)
+	material, err := v.Lookup(ctx, credential.accessKeyID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidAccessKeyID, credential.accessKeyID)
 	}
@@ -120,7 +120,7 @@ func (v *Verifier) verifyPresigned(ctx context.Context, r *http.Request) (*Ident
 	// recipient editing the key or the bucket out of a share link.
 	canonicalQueryString := canonicalQuery(r.URL.RawQuery, paramSignature)
 	host := v.Proxies.Host(r)
-	signingKey := SigningKey(secretKey, credential.scope)
+	signingKey := SigningKey(material.SecretKey, credential.scope)
 
 	// A browser sends no payload hash, so presigned requests are always
 	// unsigned-payload.
@@ -137,6 +137,7 @@ func (v *Verifier) verifyPresigned(ctx context.Context, r *http.Request) (*Ident
 			return &Identity{
 				AccessKeyID: credential.accessKeyID,
 				PayloadHash: payloadHash,
+				Grant:       material.Grant,
 				signingKey:  signingKey,
 				scope:       credential.scope,
 				timestamp:   signedAt.UTC().Format(iso8601),

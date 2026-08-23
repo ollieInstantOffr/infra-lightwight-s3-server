@@ -3,6 +3,7 @@ package s3api
 import (
 	"context"
 	"errors"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"testing"
 	"time"
 
@@ -23,11 +24,11 @@ func testVerifier(t *testing.T, now time.Time) *Verifier {
 		Region:  "us-east-1",
 		Proxies: trust,
 		Now:     func() time.Time { return now },
-		Lookup: func(_ context.Context, accessKeyID string) (string, error) {
+		Lookup: func(_ context.Context, accessKeyID string) (KeyMaterial, error) {
 			if accessKeyID != exampleAccessKeyID {
-				return "", errNoSuchKey
+				return KeyMaterial{}, errNoSuchKey
 			}
-			return exampleSecretKey, nil
+			return KeyMaterial{SecretKey: exampleSecretKey, Grant: db.UnrestrictedGrant()}, nil
 		},
 	}
 }

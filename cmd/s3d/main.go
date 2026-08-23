@@ -146,17 +146,22 @@ func run() error {
 			Proxies: proxies,
 			// Looked up per request so a revoked credential stops working
 			// immediately rather than at the end of some cache lifetime.
-			Lookup: func(ctx context.Context, accessKeyID string) (string, error) {
+			Lookup: func(ctx context.Context, accessKeyID string) (s3api.KeyMaterial, error) {
 				cred, err := db.LookupCredential(ctx, pool, cipher, accessKeyID)
 				if err != nil {
-					return "", err
+					return s3api.KeyMaterial{}, err
 				}
 				// Best-effort, and throttled to once a minute in the query, so
 				// a failure here must not fail an otherwise valid request.
 				if err := db.TouchCredential(ctx, pool, accessKeyID); err != nil {
 					log.Warn("could not record credential use", "access_key_id", accessKeyID, "error", err)
 				}
-				return cred.SecretKey, nil
+				// The scope comes back with the secret, so what a request is
+				// authorized against is always the same version of the key that
+				// its signature was checked against — and a key narrowed or
+				// revoked a moment ago takes effect on the very next request,
+				// including one using a presigned URL signed before the change.
+				return s3api.KeyMaterial{SecretKey: cred.SecretKey, Grant: cred.Scope}, nil
 			},
 		},
 	}

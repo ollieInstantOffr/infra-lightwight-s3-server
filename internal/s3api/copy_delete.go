@@ -90,8 +90,28 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 	}
 
 	options := s.writeOptions(r, bucket)
+	grant, authenticated := grantFor(r)
 	result := DeleteResult{Xmlns: s3Namespace}
 	for _, target := range request.Objects {
+		// Authorized per key, not per request. The router only established that
+		// this key may delete something in this bucket; a prefix-scoped key
+		// naming a thousand keys must be refused for each one outside its
+		// prefix and obeyed for the rest.
+		//
+		// Refused keys come back in the per-key error list, which is how S3
+		// reports partial failure and how a client learns which of its keys
+		// were rejected. Failing the whole request instead would tell it far
+		// less.
+		if authenticated && !grant.Allows(bucket.Name, target.Key, db.PermissionDelete) {
+			noteFailure(r.Context(), ErrAccessDenied.Code,
+				"the access key is not permitted to delete "+bucket.Name+"/"+target.Key)
+			result.Errors = append(result.Errors, DeleteErroXML{
+				Key:     target.Key,
+				Code:    ErrAccessDenied.Code,
+				Message: ErrAccessDenied.Message,
+			})
+			continue
+		}
 		// One key failing must not abandon the rest: S3 reports per-key
 		// outcomes so a client can retry only what actually failed.
 		if _, err := db.DeleteObject(r.Context(), s.DB, bucket.ID, target.Key, options); err != nil {

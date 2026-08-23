@@ -30,7 +30,16 @@ func (s *Server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 	// Marshalled as an empty <Buckets/> element rather than omitted, since
 	// clients expect the element to exist even with no buckets.
 	result.Buckets.Bucket = make([]BucketEntry, 0, len(buckets))
+
+	// A scoped key sees only the buckets it can use. Bucket names describe what
+	// a deployment is for, and a listing that shows all of them makes a narrow
+	// key look wide to whoever is holding it — which is exactly the confusion
+	// scoping exists to remove.
+	grant, authenticated := grantFor(r)
 	for _, b := range buckets {
+		if authenticated && !grant.Visible(b.Name) {
+			continue
+		}
 		result.Buckets.Bucket = append(result.Buckets.Bucket, BucketEntry{
 			Name:         b.Name,
 			CreationDate: formatXMLTime(b.CreatedAt),

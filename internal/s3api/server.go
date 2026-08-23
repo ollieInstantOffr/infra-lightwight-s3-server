@@ -90,23 +90,48 @@ func (s *Server) routeService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routeBucket(w http.ResponseWriter, r *http.Request) {
+	bucket := bucketOf(r)
+
 	switch {
 	case r.Method == http.MethodPost && r.URL.Query().Has("delete"):
 		// Batch delete is a POST on the bucket with a ?delete subresource,
 		// which is how `aws s3 rm --recursive` removes a thousand keys in one
 		// request rather than a thousand.
+		//
+		// Gated loosely here and strictly per key inside the handler: a request
+		// naming a thousand keys is not one decision. The check here only
+		// rejects a key with no delete permission anywhere in the bucket, which
+		// saves parsing a body that cannot succeed.
+		if !s.permit(w, r, bucket, "", access{db.PermissionDelete, reachesSomewhere}) {
+			return
+		}
 		s.withBucket(w, r, s.handleDeleteObjects)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodPut:
+		if !s.permit(w, r, bucket, "", createBucket) {
+			return
+		}
 		s.handleCreateBucket(w, r)
 	case http.MethodGet:
+		// Listing a bucket, and listing its multipart uploads, are both reads
+		// of the bucket. What a prefix-scoped key actually sees is narrowed by
+		// the handler rather than refused here.
+		if !s.permit(w, r, bucket, "", readBucket) {
+			return
+		}
 		s.handleGetBucket(w, r)
 	case http.MethodHead:
+		if !s.permit(w, r, bucket, "", readBucket) {
+			return
+		}
 		s.handleHeadBucket(w, r)
 	case http.MethodDelete:
+		if !s.permit(w, r, bucket, "", deleteBucket) {
+			return
+		}
 		s.handleDeleteBucket(w, r)
 	default:
 		s.unsupported(w, r)
@@ -120,28 +145,61 @@ func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
 	// rather than through distinct routes, so it is dispatched before the
 	// plain verbs. uploadId identifies an in-progress upload; ?uploads with no
 	// id starts one.
+	bucket, key := bucketOf(r), keyOf(r)
+
+	// Every multipart step is part of a write. See the note in authorize.go on
+	// why abort is a write rather than a delete.
 	uploadID := query.Get("uploadId")
 	switch {
 	case r.Method == http.MethodPost && query.Has("uploads"):
+		if !s.permit(w, r, bucket, key, writeObject) {
+			return
+		}
 		s.withBucket(w, r, s.handleCreateMultipartUpload)
 		return
 	case r.Method == http.MethodPut && uploadID != "":
+		if !s.permit(w, r, bucket, key, writeObject) {
+			return
+		}
 		s.withUpload(w, r, uploadID, s.handleUploadPart)
 		return
 	case r.Method == http.MethodPost && uploadID != "":
+		if !s.permit(w, r, bucket, key, writeObject) {
+			return
+		}
 		s.withUpload(w, r, uploadID, s.handleCompleteMultipartUpload)
 		return
 	case r.Method == http.MethodDelete && uploadID != "":
+		if !s.permit(w, r, bucket, key, writeObject) {
+			return
+		}
 		s.withUpload(w, r, uploadID, s.handleAbortMultipartUpload)
 		return
 	case r.Method == http.MethodGet && uploadID != "":
+		if !s.permit(w, r, bucket, key, writeObject) {
+			return
+		}
 		s.withUpload(w, r, uploadID, s.handleListParts)
 		return
 	}
 
 	// A PUT carrying x-amz-copy-source is a server-side copy, not an upload.
+	// It touches two objects, so it needs two checks: the destination as a
+	// write, and the source as a read. Copying is how a key with read on one
+	// bucket and write on another would otherwise move data it cannot read.
 	if r.Method == http.MethodPut && r.Header.Get("x-amz-copy-source") != "" {
 		source := r.Header.Get("x-amz-copy-source")
+		if !s.permit(w, r, bucket, key, writeObject) {
+			return
+		}
+		sourceBucket, sourceKey, err := parseCopySource(source)
+		if err != nil {
+			WriteError(w, r, err)
+			return
+		}
+		if !s.permit(w, r, sourceBucket, sourceKey, readObject) {
+			return
+		}
 		s.withBucket(w, r, func(w http.ResponseWriter, r *http.Request, bucket *db.Bucket) {
 			s.handleCopyObject(w, r, bucket, source)
 		})
@@ -150,12 +208,24 @@ func (s *Server) routeObject(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPut:
+		if !s.permit(w, r, bucket, key, writeObject) {
+			return
+		}
 		s.handlePutObject(w, r)
 	case http.MethodGet:
+		if !s.permit(w, r, bucket, key, readObject) {
+			return
+		}
 		s.handleGetObject(w, r)
 	case http.MethodHead:
+		if !s.permit(w, r, bucket, key, readObject) {
+			return
+		}
 		s.handleHeadObject(w, r)
 	case http.MethodDelete:
+		if !s.permit(w, r, bucket, key, deleteObject) {
+			return
+		}
 		s.handleDeleteObject(w, r)
 	default:
 		s.unsupported(w, r)

@@ -130,12 +130,12 @@ func startExternalServer(t *testing.T, schema string) *externalEndpoint {
 		PublicURL: fmt.Sprintf("http://host.docker.internal:%d", port),
 		Verifier: &Verifier{
 			Region: "us-east-1", Proxies: trust,
-			Lookup: func(ctx context.Context, accessKeyID string) (string, error) {
+			Lookup: func(ctx context.Context, accessKeyID string) (KeyMaterial, error) {
 				c, err := db.LookupCredential(ctx, pool, cipher, accessKeyID)
 				if err != nil {
-					return "", err
+					return KeyMaterial{}, err
 				}
-				return c.SecretKey, nil
+				return KeyMaterial{SecretKey: c.SecretKey, Grant: c.Scope}, nil
 			},
 		},
 	}
