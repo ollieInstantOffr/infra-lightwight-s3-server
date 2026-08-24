@@ -2,6 +2,7 @@ package s3api
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -26,6 +27,13 @@ func WithRequestID(next http.Handler) http.Handler {
 
 // responseRecorder captures what was actually sent, so the access log reports
 // the real status and byte count rather than what the handler intended.
+//
+// Four different layers of this middleware stack each need the final status
+// and byte count — the access log, the hourly collector, the live window, and
+// the Prometheus registry — and it would be easy for each to wrap its own
+// recorder around whatever it received. That was in fact how this started,
+// and it was wrong in a way nothing failing loudly would have caught: see
+// recorderFor below.
 type responseRecorder struct {
 	http.ResponseWriter
 	status  int
@@ -48,9 +56,73 @@ func (w *responseRecorder) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// ReadFrom is what makes GetObject fast.
+//
+// http.ServeContent — how every GetObject response is served — copies the
+// blob to the client with io.Copy, and io.Copy's one real optimization is
+// checking whether the destination implements io.ReaderFrom. Go's own
+// http.ResponseWriter does, specifically so that copy can become a kernel-side
+// sendfile(2) straight from the blob file's descriptor to the socket, never
+// passing through a userspace buffer at all.
+//
+// A wrapper that only implements Write hides that from io.Copy — the type
+// assertion fails on the wrapper before it ever reaches the real writer
+// underneath, and every byte falls back to being read into a Go buffer and
+// written out again. That was silently true here: four such wrappers, stacked
+// one per middleware, on every single read this server serves.
+//
+// Delegating straight to the real writer's own ReadFrom, when it has one,
+// restores the fast path. The byte count still needs recording, since this
+// bypasses Write entirely.
+func (w *responseRecorder) ReadFrom(r io.Reader) (int64, error) {
+	rf, ok := w.ResponseWriter.(io.ReaderFrom)
+	if !ok {
+		// Nothing underneath to delegate to — an httptest recorder in a test,
+		// say. io.Copy through writerOnly falls back to our own Write, which
+		// still counts correctly; writerOnly exists only to hide this same
+		// ReadFrom method from io.Copy, which would otherwise call straight
+		// back into it and recurse forever.
+		return io.Copy(writerOnly{w}, r)
+	}
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := rf.ReadFrom(r)
+	w.written += n
+	return n, err
+}
+
+// writerOnly exposes only Write, so io.Copy cannot see a ReadFrom method on
+// what it wraps and loop back into it.
+type writerOnly struct{ io.Writer }
+
 // Unwrap lets http.ResponseController reach the underlying writer, which
 // matters for flushing and for hijacking a connection.
 func (w *responseRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// recorderFor returns w as a *responseRecorder, reusing one a middleware
+// further out in the chain already created rather than adding another layer.
+//
+// Before this, WithAccessLog, WithMetrics, WithLiveMetrics and
+// WithScrapeMetrics each wrapped their own recorder around whatever they were
+// given. All four sit on every S3 request, so a response passed through four
+// nested Write() calls before reaching the real connection — and, because
+// none of the four implemented io.ReaderFrom, none of them let a GetObject
+// response's io.Copy see through to the real one that does. Sendfile was
+// disabled on every read this server has ever served, and nothing about that
+// fails loudly: the response is correct, just copied through userspace
+// instead of staying in the kernel.
+//
+// Whichever of the four middlewares runs first creates the recorder; the
+// other three find it already installed as w and reuse the same pointer, so
+// exactly one sits between the handler and the real writer regardless of how
+// many of these middlewares are wired in.
+func recorderFor(w http.ResponseWriter) *responseRecorder {
+	if rec, ok := w.(*responseRecorder); ok {
+		return rec
+	}
+	return &responseRecorder{ResponseWriter: w}
+}
 
 // RequestRecorder receives completed requests for the console's log. The logs
 // sink satisfies it; taking an interface keeps this package independent of it.
@@ -68,7 +140,7 @@ type RequestRecorder interface {
 func WithAccessLog(log *slog.Logger, recorder RequestRecorder, proxies *httpx.ProxyTrust, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rec := &responseRecorder{ResponseWriter: w}
+		rec := recorderFor(w)
 
 		// The holder is attached further out, so both this and the metrics
 		// middleware read the same one.
@@ -216,7 +288,7 @@ func (s *Server) Authenticate(log *slog.Logger, next http.Handler) http.Handler 
 // a mutex and two increments to the request path rather than a database write.
 func WithMetrics(counter RequestCounter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		recorder := &responseRecorder{ResponseWriter: w}
+		recorder := recorderFor(w)
 		next.ServeHTTP(recorder, r)
 
 		status := recorder.status
@@ -240,7 +312,7 @@ func WithMetrics(counter RequestCounter, next http.Handler) http.Handler {
 // resolution.
 func WithLiveMetrics(counter RequestCounter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		recorder := &responseRecorder{ResponseWriter: w}
+		recorder := recorderFor(w)
 		next.ServeHTTP(recorder, r)
 
 		status := recorder.status
@@ -264,7 +336,7 @@ func WithLiveMetrics(counter RequestCounter, next http.Handler) http.Handler {
 func WithScrapeMetrics(observer RequestObserver, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
-		recorder := &responseRecorder{ResponseWriter: w}
+		recorder := recorderFor(w)
 		next.ServeHTTP(recorder, r)
 
 		status := recorder.status
