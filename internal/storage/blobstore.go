@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -100,7 +101,14 @@ func (s *Store) Root() string { return s.root }
 // If the contents already exist the temporary file is discarded and the
 // existing blob is returned; callers cannot tell the difference, and should
 // not need to.
-func (s *Store) Put(ctx context.Context, r io.Reader) (Blob, error) {
+//
+// knownDigest lets a caller that has already verified r's SHA-256 elsewhere —
+// a signed PUT, whose body is checked against x-amz-content-sha256 by a
+// reader upstream of r, in this same pass — skip having Put compute a second,
+// identical hash over the same bytes. Pass "" when no such digest exists; MD5
+// for the ETag is always computed here regardless, since nothing upstream of
+// Put has any other reason to compute it.
+func (s *Store) Put(ctx context.Context, r io.Reader, knownDigest string) (Blob, error) {
 	temp, err := os.CreateTemp(filepath.Join(s.root, tempDir), "upload-*")
 	if err != nil {
 		return Blob{}, fmt.Errorf("create temp file: %w", err)
@@ -122,11 +130,16 @@ func (s *Store) Put(ctx context.Context, r io.Reader) (Blob, error) {
 		return Blob{}, fmt.Errorf("set temp file permissions: %w", err)
 	}
 
-	sha := sha256.New()
+	var sha hash.Hash
+	digestWriter := io.Writer(io.Discard)
+	if knownDigest == "" {
+		sha = sha256.New()
+		digestWriter = sha
+	}
 	sum := md5.New()
 	// Hashing happens as part of the same copy that writes to disk; the bytes
 	// are never read twice.
-	written, err := copyWithContext(ctx, io.MultiWriter(temp, sha, sum), r)
+	written, err := copyWithContext(ctx, io.MultiWriter(temp, digestWriter, sum), r)
 	if err != nil {
 		return Blob{}, err
 	}
@@ -140,8 +153,12 @@ func (s *Store) Put(ctx context.Context, r io.Reader) (Blob, error) {
 		return Blob{}, fmt.Errorf("close temp file: %w", err)
 	}
 
+	digest := knownDigest
+	if digest == "" {
+		digest = hex.EncodeToString(sha.Sum(nil))
+	}
 	blob := Blob{
-		Digest: hex.EncodeToString(sha.Sum(nil)),
+		Digest: digest,
 		ETag:   hex.EncodeToString(sum.Sum(nil)),
 		Size:   written,
 	}
@@ -334,7 +351,7 @@ func validateDigest(digest string) error {
 // released by the caller once the metadata commits.
 func (s *Store) Concat(ctx context.Context, digests []string) (Blob, error) {
 	if len(digests) == 0 {
-		return s.Put(ctx, strings.NewReader(""))
+		return s.Put(ctx, strings.NewReader(""), "")
 	}
 
 	readers := make([]io.Reader, 0, len(digests))
@@ -356,5 +373,5 @@ func (s *Store) Concat(ctx context.Context, digests []string) (Blob, error) {
 		readers = append(readers, f)
 	}
 
-	return s.Put(ctx, io.MultiReader(readers...))
+	return s.Put(ctx, io.MultiReader(readers...), "")
 }

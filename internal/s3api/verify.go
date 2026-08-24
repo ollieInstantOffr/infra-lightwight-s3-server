@@ -173,6 +173,25 @@ func (v *Verifier) Body(r *http.Request, id *Identity) io.ReadCloser {
 	}
 }
 
+// TrustedContentSHA256 returns the body's SHA-256 if Body will verify it as
+// the bytes are read, or "" if not — aws-chunked bodies, UNSIGNED-PAYLOAD, and
+// bodyless requests carry no whole-body digest to trust.
+//
+// A caller that reads the body Body returned to completion without error has,
+// by construction, already had this digest checked against the actual bytes:
+// verifyingReader's own comparison happens inside that same read. That makes
+// it safe to reuse here instead of hashing the body a second time — a caller
+// that reads the digest before finishing the read, or after an error, would
+// be trusting a value nothing has actually confirmed yet.
+func (id *Identity) TrustedContentSHA256() string {
+	switch id.PayloadHash {
+	case StreamingSigned, StreamingSignedTrailer, StreamingUnsignedTrailer, UnsignedPayload, "":
+		return ""
+	default:
+		return strings.ToLower(id.PayloadHash)
+	}
+}
+
 // requestTime reads the signing timestamp from x-amz-date, falling back to
 // Date. Clients that send neither cannot be verified.
 func requestTime(r *http.Request) (time.Time, error) {

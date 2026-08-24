@@ -197,7 +197,7 @@ func (s *Server) handleCreateFolder(w http.ResponseWriter, r *http.Request) {
 
 	// A zero-byte blob. Content addressing means every folder marker in the
 	// system shares one file, so this costs a row rather than an inode.
-	blob, err := s.Blobs.Put(r.Context(), strings.NewReader(""))
+	blob, err := s.Blobs.Put(r.Context(), strings.NewReader(""), "")
 	if err != nil {
 		s.internalError(w, r, "create folder marker", err)
 		return

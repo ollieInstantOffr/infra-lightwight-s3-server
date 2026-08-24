@@ -156,7 +156,7 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 	body := s.Verifier.Body(r, identity)
 	defer body.Close()
 
-	blob, err := s.Blobs.Put(r.Context(), body)
+	blob, err := s.Blobs.Put(r.Context(), body, identity.TrustedContentSHA256())
 	if err != nil {
 		if apiErr := AsAPIError(err); apiErr != ErrInternalError {
 			WriteError(w, r, err)

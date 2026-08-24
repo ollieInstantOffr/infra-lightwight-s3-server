@@ -228,7 +228,7 @@ func (s *Server) handleUploadObject(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, maxUploadSize)
 	defer body.Close()
 
-	blob, err := s.Blobs.Put(r.Context(), body)
+	blob, err := s.Blobs.Put(r.Context(), body, "")
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {

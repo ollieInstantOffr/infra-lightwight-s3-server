@@ -30,7 +30,7 @@ func TestPutGetRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	payload := []byte("the quick brown fox jumps over the lazy dog")
 
-	blob, err := s.Put(context.Background(), bytes.NewReader(payload))
+	blob, err := s.Put(context.Background(), bytes.NewReader(payload), "")
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -61,13 +61,84 @@ func TestPutGetRoundTrip(t *testing.T) {
 	}
 }
 
+// A caller that already verified the body's SHA-256 elsewhere (a signed PUT,
+// checked against x-amz-content-sha256 as it streamed) passes that digest in
+// rather than have Put hash the same bytes again. Proving Put actually trusts
+// it — rather than quietly recomputing and overriding it — means passing a
+// wrong-but-well-formed digest and checking the blob lands there instead of
+// at the real content hash; if Put still computed its own hash internally,
+// the digest actually used would be the correct one regardless of what was
+// passed in, and this is the one observable difference that would catch that.
+func TestPutTrustsAKnownDigestRatherThanRecomputingIt(t *testing.T) {
+	s := newTestStore(t)
+	payload := []byte("trust, but verify never happens on purpose")
+	wrongDigest := strings.Repeat("ab", sha256.Size) // well-formed, not the real hash
+
+	blob, err := s.Put(context.Background(), bytes.NewReader(payload), wrongDigest)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if blob.Digest != wrongDigest {
+		t.Fatalf("digest = %s, want the passed-in %s (Put must not recompute it)", blob.Digest, wrongDigest)
+	}
+
+	f, err := s.Open(wrongDigest)
+	if err != nil {
+		t.Fatalf("Open(%s): %v", wrongDigest, err)
+	}
+	defer f.Close()
+	got, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("content under the trusted digest = %q, want %q", got, payload)
+	}
+
+	// ETag has no other source, so it must still be computed regardless.
+	wantETag := md5.Sum(payload)
+	if blob.ETag != hex.EncodeToString(wantETag[:]) {
+		t.Errorf("etag = %s, want %s (MD5 must still be computed even with a known digest)", blob.ETag, hex.EncodeToString(wantETag[:]))
+	}
+}
+
+// The ordinary case: an honest known digest is what the content actually
+// hashes to, and the round trip works exactly as it would without one.
+func TestPutWithACorrectKnownDigestRoundTrips(t *testing.T) {
+	s := newTestStore(t)
+	payload := []byte("the quick brown fox jumps over the lazy dog")
+	realDigest := sha256.Sum256(payload)
+	digestHex := hex.EncodeToString(realDigest[:])
+
+	blob, err := s.Put(context.Background(), bytes.NewReader(payload), digestHex)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if blob.Digest != digestHex {
+		t.Fatalf("digest = %s, want %s", blob.Digest, digestHex)
+	}
+
+	f, err := s.Open(digestHex)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	got, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("round-trip mismatch: got %q, want %q", got, payload)
+	}
+}
+
 // Range requests depend on the returned file being seekable rather than the
 // server reading and discarding a prefix.
 func TestOpenIsSeekable(t *testing.T) {
 	s := newTestStore(t)
 	payload := []byte("0123456789abcdef")
 
-	blob, err := s.Put(context.Background(), bytes.NewReader(payload))
+	blob, err := s.Put(context.Background(), bytes.NewReader(payload), "")
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -93,11 +164,11 @@ func TestPutDeduplicatesIdenticalContent(t *testing.T) {
 	s := newTestStore(t)
 	payload := []byte("identical bytes converge on one file")
 
-	first, err := s.Put(context.Background(), bytes.NewReader(payload))
+	first, err := s.Put(context.Background(), bytes.NewReader(payload), "")
 	if err != nil {
 		t.Fatalf("first Put: %v", err)
 	}
-	second, err := s.Put(context.Background(), bytes.NewReader(payload))
+	second, err := s.Put(context.Background(), bytes.NewReader(payload), "")
 	if err != nil {
 		t.Fatalf("second Put: %v", err)
 	}
@@ -114,7 +185,7 @@ func TestPutDeduplicatesIdenticalContent(t *testing.T) {
 // file backs both, and removing it once leaves nothing behind.
 func TestRemove(t *testing.T) {
 	s := newTestStore(t)
-	blob, err := s.Put(context.Background(), strings.NewReader("removable"))
+	blob, err := s.Put(context.Background(), strings.NewReader("removable"), "")
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -195,7 +266,7 @@ func TestPutCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := s.Put(ctx, bytes.NewReader(make([]byte, 4<<20))); !errors.Is(err, context.Canceled) {
+	if _, err := s.Put(ctx, bytes.NewReader(make([]byte, 4<<20)), ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Put with cancelled context = %v, want context.Canceled", err)
 	}
 	entries, err := os.ReadDir(filepath.Join(s.Root(), tempDir))
@@ -220,7 +291,7 @@ func TestConcurrentPutsOfSameContent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			blob, err := s.Put(context.Background(), bytes.NewReader(payload))
+			blob, err := s.Put(context.Background(), bytes.NewReader(payload), "")
 			digests[i], errs[i] = blob.Digest, err
 		}()
 	}
@@ -256,7 +327,7 @@ func TestLargeUploadHoldsMemoryFlat(t *testing.T) {
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
-	blob, err := s.Put(context.Background(), io.LimitReader(rand.Reader, size))
+	blob, err := s.Put(context.Background(), io.LimitReader(rand.Reader, size), "")
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}

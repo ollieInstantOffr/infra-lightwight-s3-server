@@ -57,7 +57,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request) {
 	body := s.Verifier.Body(r, identity)
 	defer body.Close()
 
-	blob, err := s.Blobs.Put(r.Context(), body)
+	blob, err := s.Blobs.Put(r.Context(), body, identity.TrustedContentSHA256())
 	if err != nil {
 		// A hash or chunk-signature failure surfaces here, mid-stream, because
 		// it cannot be known until the last byte. The blob that was written is
