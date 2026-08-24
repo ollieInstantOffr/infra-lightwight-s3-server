@@ -38,8 +38,8 @@ func TestListRequestLogsAcceptsEveryFilter(t *testing.T) {
 		"search key":    {Search: "some/key"},
 		"search reason": {Search: "scope date"},
 		"search reqid":  {Search: "ABC123"},
-		"before":         {Before: 999999},
-		"min duration":   {MinDurationMS: 10},
+		"before":        {Before: 999999},
+		"min duration":  {MinDurationMS: 10},
 		"everything": {
 			Since: time.Now().Add(-time.Hour), Until: time.Now().Add(time.Hour),
 			Surface: "s3", OnlyErrors: true, StatusFrom: 400, StatusTo: 499,
