@@ -52,7 +52,7 @@ func testPool(t *testing.T) *Pool {
 	for _, stmt := range []string{
 		`DELETE FROM buckets`, `DELETE FROM blobs`, `DELETE FROM credentials`,
 		`DELETE FROM request_logs`, `DELETE FROM server_events`,
-		`DELETE FROM alerts`, `DELETE FROM alert_rules`,
+		`DELETE FROM alerts`, `DELETE FROM alert_rules`, `DELETE FROM request_metrics`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatalf("reset (%s): %v", stmt, err)
