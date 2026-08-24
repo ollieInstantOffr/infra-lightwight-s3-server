@@ -18,6 +18,7 @@ import (
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/metrics"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/s3api"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/storage"
 )
@@ -115,6 +116,8 @@ func newConsole(t *testing.T) *consoleFixture {
 		DB: pool, Blobs: blobs, Cipher: cipher, Mailer: mailer, Proxies: trust,
 		Log: quiet, Region: "us-east-1", SessionSecret: strings.Repeat("s", 40),
 		Registry: metrics.NewRegistry("test"),
+		Live:     metrics.NewLiveWindow(),
+		InFlight: s3api.NewInFlight(),
 	}
 
 	httpSrv := httptest.NewServer(server.Handler())

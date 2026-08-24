@@ -44,9 +44,20 @@ func withRequestInfo(r *http.Request) (*http.Request, *requestInfo) {
 // the access log saw an empty context and recorded every request as Unknown —
 // wrong in the quietest possible way, since the metric existed and had
 // plausible numbers in it.
-func WithRequestInfo(next http.Handler) http.Handler {
+//
+// tracker is optional and, when given, is where this same holder also lives
+// while the request is in flight — see InFlight below. Registering here
+// rather than at routing time means a request sitting in signature
+// verification shows up immediately as "in flight", even before it has an
+// operation to report; the Performance page reads operation as "" until
+// routing fills it in, the same way a still-loading row would.
+func WithRequestInfo(tracker *InFlight, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r, _ = withRequestInfo(r)
+		r, info := withRequestInfo(r)
+		if tracker != nil {
+			stop := tracker.start(info)
+			defer stop()
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -91,6 +102,16 @@ func (i *requestInfo) snapshot() (bucket, key, code, reason string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.bucket, i.key, i.errorCode, i.reason
+}
+
+// target reads the fields an in-flight listing wants, under the same lock
+// noteTarget and noteOperation write through. A request early in its life —
+// still being authenticated, say — legitimately has both blank; the listing
+// shows that as the request having no target yet, not as an error.
+func (i *requestInfo) target() (operation, bucket, key string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.operation, i.bucket, i.key
 }
 
 // noteOperation records which S3 call this turned out to be.

@@ -234,6 +234,27 @@ func WithMetrics(counter RequestCounter, next http.Handler) http.Handler {
 	})
 }
 
+// WithLiveMetrics feeds the Performance page's Live mode, alongside the
+// hourly Collector and the Prometheus registry — three different resolutions
+// of the same request, each going to the reader who actually needs that
+// resolution.
+func WithLiveMetrics(counter RequestCounter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &responseRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		bytesIn := r.ContentLength
+		if bytesIn < 0 {
+			bytesIn = 0
+		}
+		counter.Record(status, bytesIn, recorder.written)
+	})
+}
+
 // WithScrapeMetrics feeds the counters a Prometheus scrape reads.
 //
 // Separate from WithMetrics, which rolls counts into hourly cells for the

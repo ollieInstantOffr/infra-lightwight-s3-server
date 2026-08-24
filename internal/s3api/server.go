@@ -28,6 +28,13 @@ type Server struct {
 	// Metrics counts requests for the console's overview. Optional: nil simply
 	// means nothing is counted.
 	Metrics RequestCounter
+	// Live is optional, same reasoning as Scrape: nothing wires it up in most
+	// tests, and that must not be an error.
+	Live RequestCounter
+	// InFlight is optional. Nil disables in-flight tracking rather than
+	// panicking — WithRequestInfo already treats a nil tracker as "don't
+	// bother", so nothing here needs its own guard beyond passing it through.
+	InFlight *InFlight
 	// Scrape is optional. Nil simply means nothing is exporting metrics, which
 	// is the case in most tests.
 	Scrape RequestObserver
@@ -59,12 +66,15 @@ func (s *Server) Handler() http.Handler {
 	if s.Metrics != nil {
 		handler = WithMetrics(s.Metrics, handler)
 	}
+	if s.Live != nil {
+		handler = WithLiveMetrics(s.Live, handler)
+	}
 	if s.Scrape != nil {
 		handler = WithScrapeMetrics(s.Scrape, handler)
 	}
 	// Outside everything that reads it, so the access log and the metrics both
 	// see the operation the router recorded.
-	handler = WithRequestInfo(handler)
+	handler = WithRequestInfo(s.InFlight, handler)
 	return WithRequestID(handler)
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/httpx"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/logs"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/metrics"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/s3api"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/storage"
 )
@@ -51,6 +52,12 @@ type Server struct {
 	// administrator can read /metrics — the safe default, since somebody will
 	// deploy this without reading the documentation.
 	MetricsToken string
+	// Live is the same one-second window the s3api.Server records into.
+	// Optional; nil means the Performance page's Live mode has nothing to
+	// stream and reports so rather than erroring.
+	Live *metrics.LiveWindow
+	// InFlight is the same tracker the s3api.Server registers requests into.
+	InFlight *s3api.InFlight
 
 	// AdminEmail is the bootstrap administrator, shown on the first-run screen
 	// so a fresh install says which address can sign in.
@@ -149,6 +156,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/logs/summary", s.requireSession(s.handleLogSummary))
 	mux.HandleFunc("GET /api/logs/events", s.requireSession(s.handleServerEvents))
 	mux.HandleFunc("GET /api/logs/stream", s.requireSession(s.handleLogStream))
+	mux.HandleFunc("GET /api/performance/live", s.requireSession(s.handlePerformanceLive))
 	mux.HandleFunc("GET /api/logs/settings", s.requireAdmin(s.handleLogSettings))
 	mux.HandleFunc("PUT /api/logs/settings", s.requireAdmin(s.handleUpdateLogSettings))
 

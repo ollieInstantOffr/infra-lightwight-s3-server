@@ -131,9 +131,14 @@ func run() error {
 	}
 
 	collector := metrics.New()
-	// Separate from the collector: one rolls counts into hourly cells for the
-	// console's chart, the other holds the monotonic counters a scrape reads.
+	// Three resolutions of the same request, each for a different reader: the
+	// collector rolls counts into hourly cells for the console's chart, the
+	// registry holds the monotonic counters a Prometheus scrape reads, and
+	// liveWindow keeps the last minute at one-second resolution for the
+	// Performance page's Live mode.
 	registry := metrics.NewRegistry(version)
+	liveWindow := metrics.NewLiveWindow()
+	inFlight := s3api.NewInFlight()
 
 	s3Server := &s3api.Server{
 		DB:        pool,
@@ -143,6 +148,8 @@ func run() error {
 		PublicURL: cfg.PublicS3URL,
 		S3Domain:  cfg.S3Domain,
 		Metrics:   collector,
+		Live:      liveWindow,
+		InFlight:  inFlight,
 		Scrape:    registry,
 		Logs:      logSink,
 		Verifier: &s3api.Verifier{
@@ -207,6 +214,8 @@ func run() error {
 		Sink:          logSink,
 		Registry:      registry,
 		MetricsToken:  cfg.MetricsToken,
+		Live:          liveWindow,
+		InFlight:      inFlight,
 		System: console.SystemInfo{
 			Version:           version,
 			NodeName:          nodeName(),
