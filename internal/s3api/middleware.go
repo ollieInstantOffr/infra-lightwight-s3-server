@@ -140,6 +140,7 @@ func WithAccessLog(log *slog.Logger, recorder RequestRecorder, proxies *httpx.Pr
 			// The path only. The query string is dropped wholesale because a
 			// presigned request carries its signature there.
 			Path:        r.URL.Path,
+			Operation:   Operation(r.Context()),
 			Status:      rec.status,
 			ErrorCode:   code,
 			Reason:      reason,

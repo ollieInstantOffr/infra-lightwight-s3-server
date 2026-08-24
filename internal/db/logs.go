@@ -25,6 +25,12 @@ type RequestLog struct {
 	Bucket    string
 	Key       string
 	Path      string
+	// Operation is the S3 call name the router settled on — GetObject,
+	// CompleteMultipartUpload — rather than the raw method and path, which
+	// cannot tell two different calls on the same verb apart. Empty for a
+	// request that never reached routing (a bad signature, for instance) and
+	// for console traffic, which has no S3 operations to name.
+	Operation string
 	Status    int
 	ErrorCode string
 	// Reason is the server's own explanation, which is not what the client was
@@ -62,7 +68,7 @@ func InsertRequestLogs(ctx context.Context, pool *Pool, entries []RequestLog) er
 
 	columns := []string{
 		"occurred_at", "request_id", "node", "surface", "method", "bucket",
-		"object_key", "path", "status", "error_code", "reason", "bytes_in",
+		"object_key", "path", "operation", "status", "error_code", "reason", "bytes_in",
 		"bytes_out", "duration_ms", "access_key_id", "actor", "client_ip",
 		"user_agent", "sampled",
 	}
@@ -71,7 +77,7 @@ func InsertRequestLogs(ctx context.Context, pool *Pool, entries []RequestLog) er
 	for _, e := range entries {
 		rows = append(rows, []any{
 			at(e.At), e.RequestID, e.Node, surfaceOrDefault(e.Surface), e.Method,
-			e.Bucket, truncate(e.Key, 1024), truncate(e.Path, 2048), e.Status,
+			e.Bucket, truncate(e.Key, 1024), truncate(e.Path, 2048), e.Operation, e.Status,
 			e.ErrorCode, truncate(e.Reason, 2048), e.BytesIn, e.BytesOut,
 			e.DurationMS, e.AccessKeyID, e.Actor, nullableIP(e.ClientIP),
 			truncate(e.UserAgent, 512), e.Sampled,
@@ -126,6 +132,10 @@ type LogFilter struct {
 	Method      string
 	AccessKeyID string
 	Search      string
+	// MinDurationMS keeps only requests at least this slow. The "slow" filter
+	// on the log screen and the Performance page's slowest-operations
+	// drill-through both go through this.
+	MinDurationMS int
 	// Before paginates by id rather than offset, so a busy log does not shift
 	// rows between pages while they are being read.
 	Before int64
@@ -179,6 +189,9 @@ func ListRequestLogs(ctx context.Context, q Querier, filter LogFilter) ([]Reques
 	if filter.AccessKeyID != "" {
 		add("access_key_id = $%d", filter.AccessKeyID)
 	}
+	if filter.MinDurationMS > 0 {
+		add("duration_ms >= $%d", filter.MinDurationMS)
+	}
 	if filter.Search != "" {
 		// Matches the parts a person would search: the key, the reason, or a
 		// request id copied from a support report.
@@ -198,7 +211,7 @@ func ListRequestLogs(ctx context.Context, q Querier, filter LogFilter) ([]Reques
 	args = append(args, limit)
 	query := fmt.Sprintf(`
 		SELECT id, occurred_at, request_id, node, surface, method, bucket, object_key,
-		       path, status, error_code, reason, bytes_in, bytes_out, duration_ms,
+		       path, operation, status, error_code, reason, bytes_in, bytes_out, duration_ms,
 		       access_key_id, actor, host(client_ip), user_agent, sampled
 		FROM request_logs
 		WHERE %s
@@ -216,7 +229,7 @@ func ListRequestLogs(ctx context.Context, q Querier, filter LogFilter) ([]Reques
 		var e RequestLog
 		var ip *string
 		if err := rows.Scan(&e.ID, &e.At, &e.RequestID, &e.Node, &e.Surface, &e.Method,
-			&e.Bucket, &e.Key, &e.Path, &e.Status, &e.ErrorCode, &e.Reason,
+			&e.Bucket, &e.Key, &e.Path, &e.Operation, &e.Status, &e.ErrorCode, &e.Reason,
 			&e.BytesIn, &e.BytesOut, &e.DurationMS, &e.AccessKeyID, &e.Actor,
 			&ip, &e.UserAgent, &e.Sampled); err != nil {
 			return nil, fmt.Errorf("scan request log: %w", err)
