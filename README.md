@@ -310,6 +310,28 @@ docker compose exec s3d s3d credential revoke AKIA...
 `ADMIN_EMAIL` is re-promoted to administrator on every start, so an accidentally
 removed admin is fixed by a restart.
 
+### When uploads are slow
+
+"Slow uploads" has two causes that look identical from a client: the server is
+slow, or everything between the client and the server is. Only one of them is
+worth optimising, and guessing wrong costs days.
+
+```bash
+docker compose exec s3d s3d selftest
+```
+
+It drives the running server over loopback — no reverse proxy, no TLS, no
+network link — and reports single-stream upload, single-stream download and
+concurrent aggregate throughput. It creates a temporary bucket and access key
+and removes both when it finishes.
+
+Compare that with what a real client sees against the public endpoint. If the
+client is far slower, the difference is the proxy, TLS termination or the link,
+and no change to this server will fix it. Look at the link's actual bandwidth,
+the proxy host's CPU during a transfer, and then
+[docs/reverse-proxy.md](docs/reverse-proxy.md) for the buffering and timeout
+settings whose defaults throttle large uploads.
+
 The **System & health** screen in the console reports the node, disk, database
 and configuration, and warns about the things that break a deployment quietly —
 no email provider, no access keys, a filling volume.

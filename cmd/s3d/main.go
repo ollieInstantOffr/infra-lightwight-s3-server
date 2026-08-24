@@ -58,6 +58,14 @@ func main() {
 		return
 	}
 
+	if handled, err := runSelftest(args); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(); err != nil {
 		// The logger may not exist yet if configuration itself failed, so this
 		// path deliberately writes plainly to stderr.

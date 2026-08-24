@@ -81,6 +81,7 @@ Usage:
   s3d credential create [note]     create an S3 access key pair
   s3d credential list              list credentials
   s3d credential revoke <key-id>   revoke a credential
+  s3d selftest                     measure throughput over loopback, no proxy
 
 Configuration is read from the environment. See .env.example for every
 variable, or the README for a walk-through.
