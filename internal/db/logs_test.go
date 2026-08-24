@@ -40,12 +40,13 @@ func TestListRequestLogsAcceptsEveryFilter(t *testing.T) {
 		"search reqid":  {Search: "ABC123"},
 		"before":        {Before: 999999},
 		"min duration":  {MinDurationMS: 10},
+		"operation":     {Operation: "GetObject"},
 		"everything": {
 			Since: time.Now().Add(-time.Hour), Until: time.Now().Add(time.Hour),
 			Surface: "s3", OnlyErrors: true, StatusFrom: 400, StatusTo: 499,
 			ErrorCode: "SignatureDoesNotMatch", Bucket: "b", KeyPrefix: "some/",
 			Method: "GET", AccessKeyID: "AKIATEST", Search: "scope", Before: 999999,
-			MinDurationMS: 10,
+			MinDurationMS: 10, Operation: "GetObject",
 		},
 	}
 

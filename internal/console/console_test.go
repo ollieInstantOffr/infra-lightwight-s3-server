@@ -90,6 +90,12 @@ func newConsole(t *testing.T) *consoleFixture {
 	for _, stmt := range []string{
 		`DELETE FROM buckets`, `DELETE FROM blobs`, `DELETE FROM credentials`,
 		`DELETE FROM sessions`, `DELETE FROM magic_links`, `DELETE FROM invites`, `DELETE FROM users`,
+		// request_logs and request_metrics are shared across every test in this
+		// package (one schema, test_console_pkg) — without clearing them, a
+		// test that seeds either accumulates rows from every prior run rather
+		// than starting from a known state.
+		`DELETE FROM request_logs`, `DELETE FROM request_metrics`,
+		`DELETE FROM server_events`, `DELETE FROM alerts`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatalf("reset (%s): %v", stmt, err)

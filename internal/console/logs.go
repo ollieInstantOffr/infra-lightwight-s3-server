@@ -32,10 +32,23 @@ func (s *Server) handleListLogs(w http.ResponseWriter, r *http.Request) {
 		Bucket:      query.Get("bucket"),
 		KeyPrefix:   query.Get("prefix"),
 		Method:      query.Get("method"),
+		Operation:   query.Get("operation"),
 		AccessKeyID: query.Get("accessKeyId"),
 		Search:      query.Get("q"),
 		Before:      int64Param(query.Get("before")),
 		Limit:       intParam(query.Get("limit"), 100),
+	}
+
+	// slow=1 means "at least as slow as the configured threshold" — the same
+	// number the Latency panel and the sink's own retention already use, so
+	// the log screen's idea of slow never disagrees with the one that decided
+	// which rows survived to be searched at all.
+	if query.Get("slow") == "1" {
+		policy := logs.DefaultPolicy()
+		if s.Sink != nil {
+			policy = s.Sink.Policy()
+		}
+		filter.MinDurationMS = int(policy.SlowThreshold.Milliseconds())
 	}
 
 	// A status class is friendlier than a range: people think in "4xx", not

@@ -157,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/logs/events", s.requireSession(s.handleServerEvents))
 	mux.HandleFunc("GET /api/logs/stream", s.requireSession(s.handleLogStream))
 	mux.HandleFunc("GET /api/performance/live", s.requireSession(s.handlePerformanceLive))
+	mux.HandleFunc("GET /api/performance", s.requireSession(s.handlePerformance))
 	mux.HandleFunc("GET /api/logs/settings", s.requireAdmin(s.handleLogSettings))
 	mux.HandleFunc("PUT /api/logs/settings", s.requireAdmin(s.handleUpdateLogSettings))
 

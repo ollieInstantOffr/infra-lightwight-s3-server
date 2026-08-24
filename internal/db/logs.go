@@ -125,11 +125,16 @@ type LogFilter struct {
 	StatusTo   int
 	// OnlyErrors is a shorthand for the common case, which is the reason
 	// anyone opens the log at all.
-	OnlyErrors  bool
-	ErrorCode   string
-	Bucket      string
-	KeyPrefix   string
-	Method      string
+	OnlyErrors bool
+	ErrorCode  string
+	Bucket     string
+	KeyPrefix  string
+	Method     string
+	// Operation narrows to one S3 call name — GetObject, not just any GET —
+	// which method alone cannot express. Added for the Performance page's
+	// slowest-operations drill-through, where "the GETs on this bucket" is
+	// far less specific than what the table is actually reporting on.
+	Operation   string
 	AccessKeyID string
 	Search      string
 	// MinDurationMS keeps only requests at least this slow. The "slow" filter
@@ -185,6 +190,9 @@ func ListRequestLogs(ctx context.Context, q Querier, filter LogFilter) ([]Reques
 	}
 	if filter.Method != "" {
 		add("method = $%d", filter.Method)
+	}
+	if filter.Operation != "" {
+		add("operation = $%d", filter.Operation)
 	}
 	if filter.AccessKeyID != "" {
 		add("access_key_id = $%d", filter.AccessKeyID)
