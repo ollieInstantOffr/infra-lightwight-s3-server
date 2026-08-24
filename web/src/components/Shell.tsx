@@ -37,6 +37,7 @@ const groups: NavGroup[] = [
   {
     heading: "Node",
     items: [
+      { to: "/performance", label: "Performance" },
       { to: "/system", label: "System & health" },
       { to: "/logs", label: "Logs" },
       { to: "/alerts", label: "Alerts", badge: "alerts" },

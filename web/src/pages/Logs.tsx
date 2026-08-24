@@ -41,9 +41,11 @@ export function LogsPage() {
 
   // Filters live in the URL so a diagnosis can be shared as a link.
   const errorsOnly = params.get("errors") === "1";
+  const slowOnly = params.get("slow") === "1";
   const surface = params.get("surface") ?? "";
   const code = params.get("code") ?? "";
   const bucket = params.get("bucket") ?? "";
+  const operation = params.get("operation") ?? "";
   const accessKeyId = params.get("accessKeyId") ?? "";
   const since = params.get("since") ?? "60";
   const [search, setSearch] = useState(params.get("q") ?? "");
@@ -59,9 +61,11 @@ export function LogsPage() {
     (extra?: Record<string, string>) => {
       const q = new URLSearchParams();
       if (errorsOnly) q.set("errors", "1");
+      if (slowOnly) q.set("slow", "1");
       if (surface) q.set("surface", surface);
       if (code) q.set("code", code);
       if (bucket) q.set("bucket", bucket);
+      if (operation) q.set("operation", operation);
       if (accessKeyId) q.set("accessKeyId", accessKeyId);
       if (since) q.set("since", since);
       const term = params.get("q");
@@ -69,7 +73,7 @@ export function LogsPage() {
       for (const [k, v] of Object.entries(extra ?? {})) q.set(k, v);
       return q;
     },
-    [errorsOnly, surface, code, bucket, accessKeyId, since, params],
+    [errorsOnly, slowOnly, surface, code, bucket, operation, accessKeyId, since, params],
   );
 
   const load = useCallback(async () => {
@@ -146,6 +150,13 @@ export function LogsPage() {
             >
               {live ? "Live · stop" : "Live tail"}
             </Button>
+            <Button
+              variant={slowOnly ? "primary" : "secondary"}
+              onClick={() => setParam("slow", slowOnly ? "" : "1")}
+              title="Requests at or above the configured slow threshold — the same one the Performance page's latency panel uses."
+            >
+              Slow only
+            </Button>
             <Button onClick={load}>Refresh</Button>
           </>
         }
@@ -221,7 +232,7 @@ export function LogsPage() {
                   { value: "console", label: "Console" },
                 ]}
               />
-              {(code || bucket || accessKeyId || params.get("q")) && (
+              {(code || bucket || operation || accessKeyId || params.get("q")) && (
                 <Button
                   onClick={() => {
                     setSearch("");

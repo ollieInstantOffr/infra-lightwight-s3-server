@@ -301,6 +301,7 @@ export type LogEntry = {
   requestId: string;
   surface: "s3" | "console";
   method: string;
+  operation: string;
   bucket: string;
   key: string;
   path: string;
@@ -452,3 +453,64 @@ export function uploadObject(
     request.send(file);
   });
 }
+
+// ─── Performance ────────────────────────────────────────────────────────────
+
+export type PerformanceRange = "1h" | "24h" | "7d";
+
+export type PerformanceSeriesPoint = { at: string; requests: number; errors: number };
+
+export type PerformanceLatency = {
+  p50Ms: number;
+  p90Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  // Exact, not estimated: every request at or above the slow threshold is
+  // always kept, never sampled away.
+  overThreshold: number;
+  sampleRows: number;
+};
+
+export type SlowestOperation = {
+  operation: string;
+  bucket: string;
+  // Weighted estimates, not raw counts from the sampled log — see the
+  // coverage note below for why that distinction matters.
+  callsEstimate: number;
+  p95Ms: number;
+  bytesEstimate: number;
+};
+
+export type PerformanceSummary = {
+  since: string;
+  until: string;
+  requests: number;
+  clientErrors: number;
+  serverErrors: number;
+  errorRate: number;
+  bytesIn: number;
+  bytesOut: number;
+  series: PerformanceSeriesPoint[];
+  latency: PerformanceLatency;
+  slowThresholdMs: number;
+  sampleRate: number;
+  slowestOperations: SlowestOperation[];
+  // Whether the sampled log (latency, slowest operations) can actually reach
+  // back to the start of the requested window. The request-count KPIs never
+  // need this — they come from the durable rollup — but latency and slowest
+  // operations are built from request_logs, which is purged on a much
+  // shorter retention.
+  coverage: { partial: boolean; coveredSince: string };
+};
+
+export type PerformanceLivePoint = { at: string; requests: number; bytesIn: number; bytesOut: number };
+
+export type PerformanceInFlightEntry = { operation: string; bucket: string; key: string; ageMs: number };
+
+export type PerformanceLiveSnapshot = {
+  series: PerformanceLivePoint[];
+  requestsThisSecond: number;
+  peakRequests: number;
+  inFlightCount: number;
+  inFlight: PerformanceInFlightEntry[];
+};

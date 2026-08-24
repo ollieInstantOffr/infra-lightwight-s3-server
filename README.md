@@ -183,6 +183,15 @@ the buckets it can use, and listing a bucket shows only its own prefix.
 drag-and-drop upload, access keys, users and invitations, version history with
 restore, an audit log, request metrics, and a system health screen.
 
+**Performance** — request volume, error rate and latency percentiles for
+1h/24h/7d windows, a slowest-operations table that drills straight into the
+log, and a Live mode streaming per-second throughput and an in-flight request
+count over SSE from in-memory state — no database work on the live path.
+Latency and the slowest-operations table are estimated from the sampled
+request log, weighted to correct for the sample rate rather than read raw,
+and the page says so plainly whenever the selected window reaches further
+back than the sample can honestly cover.
+
 ### Not implemented
 
 Object locking, replication, storage classes, requester-pays, ACLs (buckets are

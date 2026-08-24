@@ -90,6 +90,7 @@ func logResponse(e db.RequestLog) map[string]any {
 		"requestId":   e.RequestID,
 		"surface":     e.Surface,
 		"method":      e.Method,
+		"operation":   e.Operation,
 		"bucket":      e.Bucket,
 		"key":         e.Key,
 		"path":        e.Path,

@@ -8,6 +8,7 @@ import { CredentialsPage } from "./pages/Credentials";
 import { EndpointPage } from "./pages/Endpoint";
 import { UsersPage } from "./pages/Users";
 import { SystemPage } from "./pages/System";
+import { PerformancePage } from "./pages/Performance";
 import { AuditPage_ } from "./pages/Audit";
 import { LogsPage } from "./pages/Logs";
 import { AlertsPage } from "./pages/Alerts";
@@ -48,6 +49,7 @@ export function App() {
         <Route path="/buckets/:bucket/*" element={<ObjectsPage />} />
         <Route path="/endpoint" element={<EndpointPage />} />
         <Route path="/system" element={<SystemPage />} />
+        <Route path="/performance" element={<PerformancePage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/account" element={<AccountPage />} />
