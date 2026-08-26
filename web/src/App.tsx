@@ -13,11 +13,13 @@ import { AuditPage_ } from "./pages/Audit";
 import { LogsPage } from "./pages/Logs";
 import { AlertsPage } from "./pages/Alerts";
 import { AccountPage } from "./pages/Account";
+import { ForcedPasswordChangePage } from "./pages/ChangePassword";
+import { SettingsPage } from "./pages/Settings";
 import { useSession } from "./lib/session";
 import { Spinner } from "./components/ui";
 
 export function App() {
-  const { user, loading } = useSession();
+  const { user, loading, refresh } = useSession();
   const location = useLocation();
 
   if (loading) {
@@ -33,10 +35,17 @@ export function App() {
     // bookmarked deep link survives the round trip through email.
     return (
       <Routes>
-        <Route path="/sign-in" element={<SignInPage />} />
+        <Route path="/sign-in" element={<SignInPage onSignedIn={() => void refresh()} />} />
         <Route path="*" element={<Navigate to="/sign-in" replace state={{ from: location.pathname }} />} />
       </Routes>
     );
+  }
+
+  // A password somebody else chose stands in front of everything. The server
+  // refuses every other route while the flag is set, so rendering the shell
+  // would produce a console where nothing works and nothing explains why.
+  if (user.mustChangePassword) {
+    return <ForcedPasswordChangePage />;
   }
 
   return (
@@ -57,6 +66,7 @@ export function App() {
             following a shared link should land somewhere useful. */}
         <Route path="/keys" element={user.isAdmin ? <CredentialsPage /> : <Navigate to="/" replace />} />
         <Route path="/users" element={user.isAdmin ? <UsersPage /> : <Navigate to="/" replace />} />
+        <Route path="/settings" element={user.isAdmin ? <SettingsPage /> : <Navigate to="/" replace />} />
         <Route path="/audit" element={user.isAdmin ? <AuditPage_ /> : <Navigate to="/" replace />} />
         <Route path="/sign-in" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

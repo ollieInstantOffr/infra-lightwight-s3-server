@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Session } from "../lib/api";
 import { useSession } from "../lib/session";
+import { ChangePasswordForm } from "./ChangePassword";
 import { formatDate, formatRelative } from "../lib/format";
 import {
   Button,
@@ -75,6 +76,17 @@ export function AccountPage() {
       />
 
       {error && <ErrorNotice message={error} />}
+
+      <Card className="mb-[16px] p-[22px]">
+        <h2 className="m-0 mb-[5px] text-[16px] font-semibold tracking-[-0.01em]">Password</h2>
+        <p className="m-0 mb-[18px] text-[12.5px] leading-[1.6] text-ink-muted">
+          Changing it signs out every other device. There is no reset email — if you lose it, an
+          administrator can set a new one.
+        </p>
+        <div className="max-w-[380px]">
+          <ChangePasswordForm />
+        </div>
+      </Card>
 
       <Card className="mb-[16px] overflow-hidden">
         <div className="flex items-center justify-between border-b border-line-row px-[18px] py-[14px]">

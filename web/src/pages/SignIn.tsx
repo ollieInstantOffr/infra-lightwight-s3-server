@@ -1,48 +1,36 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { api, type SetupState } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Button, Card, ErrorNotice, Field, InfoNotice, Spinner, TextInput } from "../components/ui";
 import { Logo } from "../components/Logo";
 
-// The reasons the callback can send someone back with. Each becomes a sentence
-// saying what to do next; "error=expired" on its own helps nobody.
-const reasons: Record<string, string> = {
-  expired: "That sign-in link has expired or was already used. Request a new one below.",
-  missing: "That link was incomplete. Request a new one below.",
-  "not-invited":
-    "That address does not have access to this console. Ask an administrator for an invitation.",
-};
-
-export function SignInPage() {
-  const [params] = useSearchParams();
+export function SignInPage({ onSignedIn }: { onSignedIn: () => void }) {
   const { data: setup, loading } = useApi<SetupState>("/api/setup");
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const reason = params.get("error");
-  const reasonMessage = reason
-    ? (reasons[reason] ?? "That sign-in link did not work. Request a new one below.")
-    : null;
-
-  // A fresh install shows what to do rather than a bare form: without this,
-  // the first thing an operator meets is a login box with no indication of
-  // which address will work.
-  const firstRun = setup !== null && !setup.configured;
+  // The bootstrap administrator exists but has no password on a fresh
+  // deployment, and on the first start after moving off magic links. Showing a
+  // form that would reject the only address that should work — with no
+  // explanation — is the worst possible first impression, so the screen shows
+  // the one command that fixes it instead.
+  const needsFirstPassword = setup !== null && !setup.adminHasPassword;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    setSending(true);
+    setSubmitting(true);
     setError(null);
     try {
-      await api.post("/api/auth/magic-link", { email });
-      setSent(true);
+      await api.post("/api/auth/login", { email, password });
+      onSignedIn();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not request a sign-in link.");
+      setError(caught instanceof Error ? caught.message : "Could not sign in.");
+      // Kept, so a mistyped password does not also mean retyping the address.
+      setPassword("");
     } finally {
-      setSending(false);
+      setSubmitting(false);
     }
   }
 
@@ -63,63 +51,52 @@ export function SignInPage() {
         </div>
 
         <Card className="p-[26px]">
-          {firstRun ? (
-            <FirstRun setup={setup} onUse={(address) => setEmail(address)} />
+          {needsFirstPassword && setup ? (
+            <FirstRun setup={setup} />
           ) : (
             <>
               <h1 className="m-0 mb-[7px] text-[23px] font-semibold tracking-[-0.02em]">Sign in</h1>
               <p className="m-0 text-[13px] text-ink-muted">
-                We will email you a link. There is no password.
+                Use the email address and password for this console.
+              </p>
+
+              <form className="mt-[22px] space-y-[16px]" onSubmit={submit}>
+                <Field label="Email address">
+                  <TextInput
+                    type="email"
+                    name="email"
+                    value={email}
+                    onChange={setEmail}
+                    placeholder="you@example.com"
+                    required
+                    autoFocus
+                  />
+                </Field>
+                <Field label="Password">
+                  <TextInput
+                    type="password"
+                    name="password"
+                    value={password}
+                    onChange={setPassword}
+                    required
+                  />
+                </Field>
+                {error && <ErrorNotice message={error} />}
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={submitting || email.trim() === "" || password === ""}
+                >
+                  {submitting ? "Signing in…" : "Sign in"}
+                </Button>
+              </form>
+
+              <p className="mt-[18px] m-0 text-[12px] leading-[1.6] text-ink-faint">
+                Forgotten it? There is no reset email. An administrator can set a new one, or it can
+                be reset on the server with{" "}
+                <span className="font-mono text-[11.5px]">s3d user set-password</span>.
               </p>
             </>
-          )}
-
-          {reasonMessage && (
-            <div className="mt-[18px]">
-              <ErrorNotice message={reasonMessage} />
-            </div>
-          )}
-
-          {sent ? (
-            <div className="mt-[22px] space-y-[12px]">
-              <h2 className="m-0 text-[21px] font-semibold tracking-[-0.02em]">Check your inbox</h2>
-              {/* Deliberately conditional: the server is careful not to confirm
-                  whether the address exists, and the interface must not undo
-                  that by phrasing it as a certainty. */}
-              <p className="m-0 text-[13px] leading-[1.6]">
-                If <span className="font-medium">{email}</span> can sign in, a link is on its way.
-              </p>
-              <p className="m-0 text-[12.5px] text-ink-muted">
-                It expires in 15 minutes and can only be used once.
-              </p>
-              {setup && !setup.emailConfigured && (
-                <InfoNotice tone="warn">
-                  No email provider is configured, so the link was written to the server log instead
-                  of sent. Run <span className="font-mono">docker compose logs s3d</span> to find it.
-                </InfoNotice>
-              )}
-              <Button variant="secondary" onClick={() => setSent(false)}>
-                Use a different address
-              </Button>
-            </div>
-          ) : (
-            <form className="mt-[22px] space-y-[16px]" onSubmit={submit}>
-              <Field label="Email address">
-                <TextInput
-                  type="email"
-                  name="email"
-                  value={email}
-                  onChange={setEmail}
-                  placeholder="you@example.com"
-                  required
-                  autoFocus
-                />
-              </Field>
-              {error && <ErrorNotice message={error} />}
-              <Button type="submit" variant="primary" disabled={sending || email.trim() === ""}>
-                {sending ? "Sending…" : "Email me a link"}
-              </Button>
-            </form>
           )}
         </Card>
 
@@ -133,27 +110,44 @@ export function SignInPage() {
   );
 }
 
-function FirstRun({ setup, onUse }: { setup: SetupState; onUse: (email: string) => void }) {
+function FirstRun({ setup }: { setup: SetupState }) {
   return (
     <>
       <h1 className="m-0 mb-[5px] text-[20px] font-semibold tracking-[-0.02em]">
-        Create the first admin
+        Set the first password
       </h1>
       <p className="m-0 text-[13px] leading-[1.6] text-ink-muted">
-        Nobody has signed in yet. The address in <span className="font-mono text-[12px]">ADMIN_EMAIL</span>{" "}
-        is the only one that can, until it invites others.
+        The administrator account exists but has no password, so nobody can sign in yet. Set one on
+        the server, then come back here.
       </p>
+
       <div className="mt-[16px] rounded-[12px] border border-line bg-inset px-[14px] py-[12px]">
         <p className="m-0 mb-[3px] text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-heading">
           Bootstrap administrator
         </p>
-        <button
-          className="font-mono text-[13px] underline-offset-2 hover:underline"
-          onClick={() => onUse(setup.adminEmail)}
-          title="Use this address"
-        >
-          {setup.adminEmail}
-        </button>
+        <p className="m-0 font-mono text-[13px]">{setup.adminEmail}</p>
+      </div>
+
+      <div className="mt-[12px] rounded-[12px] border border-line bg-inset px-[14px] py-[12px]">
+        <p className="m-0 mb-[5px] text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-heading">
+          Run this on the server
+        </p>
+        <code className="block break-all font-mono text-[12px] leading-[1.6]">
+          docker compose exec s3d s3d user set-password {setup.adminEmail}
+        </code>
+      </div>
+
+      <div className="mt-[14px]">
+        <InfoNotice tone="warn">
+          It asks for the password twice and does not echo it, so it stays out of your shell
+          history.
+        </InfoNotice>
+      </div>
+
+      <div className="mt-[16px]">
+        <Button variant="secondary" onClick={() => window.location.reload()}>
+          I have set it
+        </Button>
       </div>
     </>
   );

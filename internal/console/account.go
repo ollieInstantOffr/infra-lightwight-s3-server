@@ -150,13 +150,25 @@ func (s *Server) handleSetupState(w http.ResponseWriter, r *http.Request) {
 	_ = s.DB.QueryRow(r.Context(),
 		`SELECT count(*) FROM credentials WHERE revoked_at IS NULL`).Scan(&credentials)
 
+	// Whether the bootstrap administrator can sign in at all. On a fresh
+	// deployment, and on the first start after moving to password
+	// authentication, the account exists but has no password — and a sign-in
+	// form that rejects the only address that should work, with no explanation,
+	// is the worst possible first impression.
+	adminHasPassword, err := db.HasPassword(r.Context(), s.DB, s.AdminEmail)
+	if err != nil && !errors.Is(err, db.ErrUserNotFound) {
+		s.internalError(w, r, "read setup state", err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"configured":      everSignedIn,
-		"adminEmail":      s.AdminEmail,
-		"emailConfigured": s.System.ResendConfigured,
-		"hasCredentials":  credentials > 0,
-		"consoleURL":      s.PublicURL,
-		"s3URL":           s.PublicS3URL,
+		"configured":       everSignedIn,
+		"adminEmail":       s.AdminEmail,
+		"adminHasPassword": adminHasPassword,
+		"emailConfigured":  s.System.ResendConfigured,
+		"hasCredentials":   credentials > 0,
+		"consoleURL":       s.PublicURL,
+		"s3URL":            s.PublicS3URL,
 	})
 }
 

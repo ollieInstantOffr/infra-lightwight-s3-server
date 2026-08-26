@@ -42,6 +42,7 @@ const groups: NavGroup[] = [
       { to: "/logs", label: "Logs" },
       { to: "/alerts", label: "Alerts", badge: "alerts" },
       { to: "/audit", label: "Audit log", adminOnly: true },
+      { to: "/settings", label: "Settings", adminOnly: true },
     ],
   },
 ];

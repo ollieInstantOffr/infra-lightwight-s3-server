@@ -5,13 +5,27 @@
 // the session ended, and is surfaced as a distinct error type so the app can
 // redirect to sign-in rather than showing a generic failure.
 
+/**
+ * The server sends this alongside a 403 when the signed-in user must choose a
+ * new password before doing anything else. Matched on rather than the message,
+ * which is prose and may be reworded.
+ */
+export const CODE_PASSWORD_CHANGE_REQUIRED = "password_change_required";
+
 export class ApiError extends Error {
   readonly status: number;
+  readonly code: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null = null) {
     super(message);
     this.status = status;
+    this.code = code;
     this.name = "ApiError";
+  }
+
+  /** The user must change their password before anything else will work. */
+  get needsPasswordChange(): boolean {
+    return this.code === CODE_PASSWORD_CHANGE_REQUIRED;
   }
 
   /** The session has ended or was never established. */
@@ -64,7 +78,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       typeof payload === "object" && payload !== null && "error" in payload
         ? String((payload as { error: unknown }).error)
         : `Request failed (${response.status}).`;
-    throw new ApiError(response.status, message);
+    const code =
+      typeof payload === "object" && payload !== null && "code" in payload
+        ? String((payload as { code: unknown }).code)
+        : null;
+    throw new ApiError(response.status, message, code);
   }
 
   return payload as T;
@@ -170,13 +188,6 @@ export type CreatedCredential = {
   snippets: Record<string, string>;
 };
 
-export type Invite = {
-  id: string;
-  email: string;
-  role: string;
-  createdAt: string;
-  expiresAt: string;
-};
 
 export type Dashboard = {
   buckets: number;
@@ -394,10 +405,46 @@ export function alertsChanged(): void {
 export type SetupState = {
   configured: boolean;
   adminEmail: string;
+  /**
+   * False when the bootstrap administrator has no password yet, which is the
+   * state a fresh deployment starts in. The sign-in screen shows the command
+   * that fixes it rather than a form that would reject every attempt.
+   */
+  adminHasPassword: boolean;
   emailConfigured: boolean;
   hasCredentials: boolean;
   consoleURL: string;
   s3URL: string;
+};
+
+/** The signed-in user, as /api/auth/me reports them. */
+export type CurrentUser = {
+  id: string;
+  email: string;
+  role: string;
+  isAdmin: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+  /**
+   * True when the password was chosen by an administrator. While it is set the
+   * server refuses every route except changing the password, signing out and
+   * reading this profile, so the app must route to the change screen.
+   */
+  mustChangePassword: boolean;
+};
+
+/** What the server returns after creating a user or resetting a password. */
+export type IssuedPassword = {
+  password: string;
+  message: string;
+};
+
+export type AlertEmailSettings = {
+  enabled: boolean;
+  from: string;
+  /** Presence only. The key itself is never sent to the browser. */
+  hasApiKey: boolean;
+  updatedAt: string;
 };
 
 // ─── Uploads ─────────────────────────────────────────────────────────────────
