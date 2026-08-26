@@ -32,6 +32,22 @@ fi
 heading() { printf '\n%s%s%s\n' "$BOLD" "$1" "$RESET"; }
 info()    { printf '  %s\n' "$1"; }
 muted()   { printf '  %s%s%s\n' "$DIM" "$1" "$RESET"; }
+
+# A step heading carrying whether it must be answered. Marking every step makes
+# it obvious which ones a first-time installer can skip, rather than leaving
+# them all looking equally mandatory.
+step_required() {
+  printf '\n%s%s%s  %s(required)%s\n' "$BOLD" "$1" "$RESET" "$GREEN" "$RESET"
+}
+# Deliberately just "(optional)": how to skip differs between a y/N prompt and
+# a field with a default, and each step says which in its own words.
+step_optional() {
+  printf '\n%s%s%s  %s(optional)%s\n' "$BOLD" "$1" "$RESET" "$DIM" "$RESET"
+}
+
+# example <text> — a concrete valid answer. Every prompt that expects a
+# particular shape gets one; "Base domain for buckets" means nothing on its own.
+example() { printf '  %sExample:%s %s\n' "$DIM" "$RESET" "$1"; }
 good()    { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$1"; }
 warn()    { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$1"; }
 fail()    { printf '\n  %serror%s %s\n\n' "$RED" "$RESET" "$1" >&2; exit 1; }
@@ -189,6 +205,19 @@ check_prerequisites() {
 configure() {
   heading "Pail setup"
   muted "S3-compatible object storage on your own hardware."
+
+  printf '\n'
+  info "Five questions, two of which you can skip. About a minute."
+  printf '\n'
+  printf '    %s1%s  Where it runs        %s(required)%s\n' "$CYAN" "$RESET" "$GREEN" "$RESET"
+  printf '    %s2%s  Administrator email  %s(required)%s\n' "$CYAN" "$RESET" "$GREEN" "$RESET"
+  printf '    %s3%s  Alert email          %s(optional)%s\n' "$CYAN" "$RESET" "$DIM" "$RESET"
+  printf '    %s4%s  S3 region            %s(optional, defaults to us-east-1)%s\n' "$CYAN" "$RESET" "$DIM" "$RESET"
+  printf '    %s5%s  Secrets              %s(generated for you)%s\n' "$CYAN" "$RESET" "$DIM" "$RESET"
+  printf '\n'
+  muted "Have ready: the domain names clients will use, if this sits behind a"
+  muted "reverse proxy. Everything else has a working default."
+  printf '\n'
   muted "Press enter to accept the value in brackets."
 
   # Existing configuration is reused where it is safe to, and never silently
@@ -204,7 +233,7 @@ configure() {
   fi
 
   # ── Where this will run ────────────────────────────────────────────────────
-  heading "1. Where will this run?"
+  step_required "1. Where will this run?"
 
   local placement
   choose placement "How will people reach this server?" \
@@ -222,46 +251,67 @@ configure() {
     muted "These must be the URLs clients actually use. SigV4 signs the hostname,"
     muted "so a mismatch here makes every S3 request fail with SignatureDoesNotMatch."
     printf '\n'
+    example "https://s3.example.com  —  the endpoint you give to aws-cli and the SDKs"
     ask_until public_s3 valid_url "Enter a full URL, such as https://s3.example.com" \
       "Public URL for the S3 API" "https://s3.example.com"
+    printf '\n'
+    example "https://console.example.com  —  where you sign in with a browser"
     ask_until public_console valid_url "Enter a full URL, such as https://console.example.com" \
       "Public URL for the console" "https://console.example.com"
 
     printf '\n'
-    muted "Virtual-host style addressing lets clients use bucket.s3.example.com."
-    muted "It needs a wildcard DNS record and certificate. Path style always works."
+    muted "Virtual-host style addressing lets clients use bucket.s3.example.com"
+    muted "instead of s3.example.com/bucket. It needs a wildcard DNS record and a"
+    muted "wildcard certificate. Path style always works, so skipping this is safe."
     if confirm "Enable virtual-host style addressing?" N; then
       local host=${public_s3#*://}
+      printf '\n'
+      example "s3.example.com  —  buckets then answer at mybucket.s3.example.com"
       ask s3_domain "Base domain for buckets" "${host%%/*}"
     fi
 
     printf '\n'
     muted "The ports are published on the host for the proxy to reach."
-    muted "Loopback is right when the proxy runs on this machine."
+    printf '\n'
+    example "127.0.0.1  —  the proxy runs on this machine (recommended)"
+    example "0.0.0.0    —  the proxy is on another host; firewall these ports"
     ask bind_address "Bind the ports to which address" "127.0.0.1"
   fi
 
   # ── Administrator ──────────────────────────────────────────────────────────
-  heading "2. Who administers it?"
-  muted "This address can always sign in, and invites everyone else."
-  muted "It is re-promoted on every start, so it is also the way back in."
+  step_required "2. Who administers it?"
+  muted "The first account. It creates every other user, and is re-promoted to"
+  muted "administrator on every start — so it is also the way back in if the"
+  muted "last admin is removed by accident."
   printf '\n'
+  muted "You will set its password after the stack starts; this step only names"
+  muted "the account. No email is sent, here or ever, to sign in."
+  printf '\n'
+  example "you@example.com"
   ask_until admin_email valid_email "That does not look like an email address." \
     "Administrator email" "$(read_env ADMIN_EMAIL || echo '')"
 
   # ── Email ──────────────────────────────────────────────────────────────────
-  heading "3. Alert email"
-  muted "Signing in uses a password and never needs email. This is only for"
-  muted "alert notifications — without it, alerts still appear in the console,"
-  muted "they just do not reach you when you are not looking at it."
-  muted "It can also be configured later under Settings in the console."
+  step_optional "3. Alert email"
+  muted "Signing in uses a password and never needs email. This is only so that"
+  muted "alerts reach you when you are not looking at the console — they always"
+  muted "appear in it either way."
+  printf '\n'
+  muted "Skip this unless you already have a Resend account. It is easier to set"
+  muted "later in the console under Settings, where a test button proves it works."
   printf '\n'
 
   local resend_key="" resend_from=""
-  if confirm "Configure Resend for alert email?" N; then
-    ask_secret resend_key "Resend API key (starts with re_)"
+  if confirm "Configure Resend for alert email now?" N; then
+    printf '\n'
+    example "re_AbC123...  —  from resend.com/api-keys"
+    ask_secret resend_key "Resend API key"
     if [[ -n $resend_key ]]; then
       local domain=${admin_email#*@}
+      printf '\n'
+      muted "The sender. Its domain must be verified in your Resend account, or"
+      muted "every send is rejected."
+      example "Pail <no-reply@$domain>"
       ask resend_from "From address" "Pail <no-reply@$domain>"
     fi
   else
@@ -269,13 +319,19 @@ configure() {
   fi
 
   # ── Region ─────────────────────────────────────────────────────────────────
-  heading "4. Region"
-  muted "Any value works, as long as your clients use the same one."
+  step_optional "4. S3 region"
+  muted "A label, not a location — nothing is stored anywhere but this machine."
+  muted "It only has to match what your clients are configured with, and SigV4"
+  muted "signs it, so a mismatch fails every request with SignatureDoesNotMatch."
   printf '\n'
+  muted "Leave it alone unless you have a reason. us-east-1 is what most tools"
+  muted "assume when nothing is set."
+  printf '\n'
+  example "us-east-1"
   ask s3_region "S3 region" "$(read_env S3_REGION || echo 'us-east-1')"
 
   # ── Secrets ────────────────────────────────────────────────────────────────
-  heading "5. Secrets"
+  heading "5. Secrets  ${DIM}(generated — nothing to answer)${RESET}"
 
   local session_secret credentials_key postgres_password
   local existing_credentials_key=""
@@ -304,7 +360,7 @@ configure() {
   printf '  %-22s %s\n' "Administrator" "$admin_email"
   printf '  %-22s %s\n' "Region" "$s3_region"
   printf '  %-22s %s\n' "Bucket subdomains" "${s3_domain:-off (path style only)}"
-  printf '  %-22s %s\n' "Outbound email" "${resend_key:+configured}${resend_key:-not configured}"
+  printf '  %-22s %s\n' "Alert email" "${resend_key:+configured}${resend_key:-not set — configure later in Settings}"
   printf '  %-22s %s\n' "Ports bound to" "$bind_address"
   printf '\n'
 
@@ -457,23 +513,34 @@ show_next_steps() {
   printf '  %-10s %s%s%s\n' "Console" "$CYAN" "$console_url" "$RESET"
   printf '  %-10s %s%s%s\n' "S3 API" "$CYAN" "$s3_url" "$RESET"
 
-  heading "Signing in"
   # The admin account exists but has no password: nothing can invent one for
-  # it, so the very first thing anyone must do is set it here.
-  info "Set the administrator password, then sign in as $admin_email:"
-  printf '\n    %s%s exec s3d s3d user set-password %s%s\n' \
+  # it, so this is the one step nobody can skip, and it is numbered as such.
+  heading "Next: two steps to a working install"
+
+  printf '\n  %s1.%s Set the administrator password %s(required — nobody can sign in until you do)%s\n' \
+    "$CYAN" "$RESET" "$GREEN" "$RESET"
+  printf '\n     %s%s exec s3d s3d user set-password %s%s\n' \
     "$DIM" "${COMPOSE[*]}" "$admin_email" "$RESET"
   printf '\n'
-  muted "It asks twice and does not echo, so it stays out of your shell history."
+  muted "     It asks twice and does not echo, so it stays out of your shell"
+  muted "     history. At least 12 characters; length is the only rule."
+
+  printf '\n  %s2.%s Sign in and check it works\n' "$CYAN" "$RESET"
+  printf '\n     %sOpen %s%s and sign in as %s\n' "$DIM" "$console_url" "$RESET" "$admin_email"
+  printf '\n'
+  muted "     Create a bucket, drag a file into it, and download it again. That"
+  muted "     round trip is the only proof the install actually works."
 
   heading "Everyday commands"
   # Width chosen to fit the longest command below; a narrower column would
   # leave the descriptions jagged.
-  local width=46
+  local width=52
   printf "    %-${width}s %s\n" "${COMPOSE[*]} logs -f s3d" "follow the log"
   printf "    %-${width}s %s\n" "${COMPOSE[*]} restart s3d" "restart"
   printf "    %-${width}s %s\n" "${COMPOSE[*]} down" "stop"
   printf "    %-${width}s %s\n" "${COMPOSE[*]} exec s3d s3d credential list" "list access keys"
+  printf "    %-${width}s %s\n" "${COMPOSE[*]} exec s3d s3d user list" "list console users"
+  printf "    %-${width}s %s\n" "${COMPOSE[*]} exec s3d s3d user set-password EMAIL" "reset a forgotten password"
   printf "    %-${width}s %s\n" "./setup.sh --configure" "change the configuration"
 
   if [[ $console_url != http://localhost* ]]; then

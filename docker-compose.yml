@@ -34,6 +34,10 @@ services:
       RESEND_FROM: ${RESEND_FROM:-}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Both are read by the server but were not passed through, so setting
+      # them in .env silently did nothing. The defaults match the server's own.
+      LOG_SAMPLE_RATE: ${LOG_SAMPLE_RATE:-0.01}
+      LOG_SLOW_REQUEST_MS: ${LOG_SLOW_REQUEST_MS:-3000}
       # Unset leaves /metrics reachable only by a signed-in administrator,
       # which is the safe default. See docs/monitoring.md.
       METRICS_TOKEN: ${METRICS_TOKEN:-}

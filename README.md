@@ -25,7 +25,12 @@ use something else.
 
 ---
 
-## Quick start
+## Installing it
+
+**You need:** Docker with the Compose plugin, and about five minutes. Nothing
+else — no Go toolchain, no Node, no database to set up.
+
+### 1. Clone and run the installer
 
 ```bash
 git clone https://github.com/ollieInstantOffr/infra-lightwight-s3-server.git
@@ -33,48 +38,88 @@ cd infra-lightwight-s3-server
 ./setup.sh
 ```
 
-The script asks what it cannot work out — who administers it, whether this is
-local or behind a reverse proxy, and where it will be reached — then generates
-the secrets, writes `.env`, builds, starts, and offers to create your first
-access key.
+It asks five questions, two of which you can skip:
 
-It is safe to re-run. `./setup.sh --configure` changes the configuration
-without starting anything, and `--start` starts with the configuration you
-already have. Re-running preserves `CREDENTIALS_KEY`, because replacing it
-would silently invalidate every access key that already exists.
+| # | Question | Required? | If you skip it |
+| - | -------- | --------- | -------------- |
+| 1 | Local, or behind a reverse proxy? | **Yes** | — |
+| 2 | Administrator email address | **Yes** | — |
+| 3 | Resend key for alert email | No | Alerts appear in the console but are not emailed. Set it later under **Settings**. |
+| 4 | S3 region | No | Defaults to `us-east-1`, which is what most tools assume. |
+| 5 | Secrets | Generated | Nothing to answer. |
 
-By default the console is on <http://localhost:8444> and the S3 API on
-<http://localhost:8443>.
+Then it writes `.env`, builds, and starts the stack.
 
-<details>
-<summary>Configuring it by hand instead</summary>
+If you chose **behind a reverse proxy**, have the two hostnames ready — the one
+clients will use for the S3 API, and the one you will use for the console.
+SigV4 signs the hostname, so a wrong answer here makes every S3 request fail
+with `SignatureDoesNotMatch`.
 
-```bash
-cp .env.example .env
-```
+### 2. Set the administrator password
 
-Four values have no sensible default:
-
-| Variable            | What it is                                                     |
-| ------------------- | -------------------------------------------------------------- |
-| `ADMIN_EMAIL`       | The first administrator. Re-promoted on every start.           |
-| `POSTGRES_PASSWORD` | Anything; it never leaves the compose network.                 |
-| `SESSION_SECRET`    | Signs console session cookies. `openssl rand -base64 32`        |
-| `CREDENTIALS_KEY`   | Encrypts S3 secret keys at rest. **Back this up.**              |
-
-Then `docker compose up -d`.
-
-</details>
-
-The administrator account is created on first start, but nothing can invent a
-password for it, so set one before signing in:
+The account is created on first start, but nothing can invent a password for
+it, so **nobody can sign in until you run this**:
 
 ```bash
 docker compose exec s3d s3d user set-password you@example.com
 ```
 
 It asks twice and does not echo, so the password stays out of your shell
-history. Then sign in at the console with that address and password.
+history. At least 12 characters; length is the only rule.
+
+### 3. Sign in and prove it works
+
+Open the console — <http://localhost:8444> by default — and sign in with that
+address and password.
+
+Create a bucket, drag a file into it, and download it again. That round trip is
+the only thing that actually proves the install works.
+
+The S3 API is on <http://localhost:8443>. To use it from a client, create an
+access key under **Access keys**; the console returns configuration snippets
+already filled in for aws-cli, boto3 and the SDKs.
+
+---
+
+## Re-running the installer
+
+It is safe to re-run at any time.
+
+```bash
+./setup.sh              # configure and start
+./setup.sh --configure  # change the configuration, do not start
+./setup.sh --start      # start with the configuration you already have
+```
+
+Re-running preserves `CREDENTIALS_KEY`, because replacing it would silently
+make every existing S3 access key undecryptable. The previous `.env` is saved
+alongside it with a timestamp rather than overwritten.
+
+<details>
+<summary>Configuring it by hand instead of running the installer</summary>
+
+```bash
+cp .env.example .env
+```
+
+Four values have no sensible default and must be set:
+
+| Variable            | What it is                                                      |
+| ------------------- | --------------------------------------------------------------- |
+| `ADMIN_EMAIL`       | The first administrator. Re-promoted on every start.             |
+| `POSTGRES_PASSWORD` | Anything; it never leaves the compose network.                   |
+| `SESSION_SECRET`    | Signs console session cookies. `openssl rand -base64 32`          |
+| `CREDENTIALS_KEY`   | Encrypts S3 secret keys at rest. **Back this up.**                |
+
+Everything else in `.env.example` has a working default and is commented with
+what it does. Then:
+
+```bash
+docker compose up -d
+docker compose exec s3d s3d user set-password you@example.com
+```
+
+</details>
 
 ---
 
