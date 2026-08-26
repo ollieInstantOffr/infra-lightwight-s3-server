@@ -273,6 +273,48 @@ It binds the ports to loopback only, bounds the logs, and restarts always.
 
 ---
 
+## Restarting one piece at a time
+
+By default Pail runs as one container: S3 API, console and background work in a
+single process. Restarting it drops S3 traffic for as long as it takes to come
+back.
+
+**You do not have to change anything.** The single container is still the
+default and still supported.
+
+If you would rather restart the console without interrupting uploads:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.split.yml up -d
+```
+
+That runs three containers instead of one, from the same image:
+
+| Service | Serves | Restarting it affects |
+| ------- | ------ | --------------------- |
+| `s3` | The S3 API on 8443 | S3 clients only |
+| `console` | The web console on 8444 | The console only |
+| `worker` | Nothing — sweeps, metrics, alerts | Nothing immediately |
+
+**`s3` is the one that must not go down.** The console being down is an
+inconvenience; the worker being down means garbage is not collected and alerts
+are not evaluated, both of which catch up when it returns. Only `s3` failing
+means clients cannot read or write objects.
+
+```bash
+docker compose restart console   # the S3 API keeps serving
+docker compose restart worker    # both keep serving
+```
+
+Switching back is the same command without the overlay. The database and the
+object volume are shared either way, so nothing migrates in either direction.
+
+**[docs/services.md](docs/services.md)** explains what was split and what was
+deliberately not — this makes the console restartable without dropping S3
+traffic, and does not make Pail distributed.
+
+---
+
 ## Running more than one node
 
 Pail is a single-node server today.

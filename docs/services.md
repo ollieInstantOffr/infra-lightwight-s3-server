@@ -167,15 +167,33 @@ encryption key is a wider blast radius than it needs.
 | `S3_PORT` | required | — | — |
 | `CONSOLE_PORT`, `PUBLIC_CONSOLE_URL` | — | required | — |
 | `SESSION_SECRET` | — | required | — |
-| `CREDENTIALS_KEY` | required (verifies signatures) | required (shows a key once at creation) | — |
+| `CREDENTIALS_KEY` | required (verifies signatures) | required (shows a key once at creation) | required (decrypts the alert email key) |
 | `ADMIN_EMAIL` | — | required | — |
 
-`CREDENTIALS_KEY` reaching two roles is unavoidable: the S3 API needs the secret
-to check a signature, and the console needs it to display a newly created key
-once. The worker never needs it, and that is a real reduction.
+**`CREDENTIALS_KEY` is needed by all three, and the expected reduction in blast
+radius is not real.** The reasoning that only the serving roles decrypt anything
+survived until the split was actually run: the worker sends alert
+notifications, and the Resend API key is encrypted with the same cipher, so a
+worker without it cannot send the alerts that are its whole reason for
+existing.
+
+Splitting that key — a separate one for application settings — would restore
+the reduction, and is deliberately not done here. It would mean a second secret
+to generate, back up and rotate, in exchange for narrowing one container's
+access to one API key. Worth revisiting only if the settings table grows to
+hold something more valuable.
+
+What the split does still narrow: the worker holds no `SESSION_SECRET` and no
+`ADMIN_EMAIL`, and the S3 API holds neither of those nor any console URL.
 
 Startup must fail loudly when a role lacks something it needs, and must not
 demand what it does not.
+
+Two things were only found by running it, and both were startup failures rather
+than anything subtle: `EnsureAdmin` ran in every role and tried to insert an
+empty address on a container with no `ADMIN_EMAIL`, and the credentials cipher
+was constructed unconditionally. Config validation alone would not have caught
+either, because both are in what `run()` does after the config is loaded.
 
 ---
 

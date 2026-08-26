@@ -77,9 +77,10 @@ func TestWhatEachRoleRuns(t *testing.T) {
 		{RoleAll, true, true, true, true},
 		{RoleS3, true, false, false, true},
 		{RoleConsole, false, true, false, true},
-		// The worker listens on nothing and never decrypts a stored secret,
-		// which is the one real blast-radius reduction the split buys.
-		{RoleWorker, false, false, true, false},
+		// The worker listens on nothing but still needs the credentials key:
+		// it sends alert notifications, and the Resend key is encrypted with
+		// the same cipher.
+		{RoleWorker, false, false, true, true},
 	}
 
 	for _, c := range cases {

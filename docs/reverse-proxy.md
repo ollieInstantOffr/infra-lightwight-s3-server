@@ -13,6 +13,16 @@ Two ports means two proxy hosts:
 They are separate because a bucket can be named anything, including `assets` or
 `api`. On one hostname, a bucket would eventually collide with a console route.
 
+**Running the split topology?** The hostnames and ports are the same; only the
+container names change, because each role is its own container:
+
+| Proxy host              | Forwards to    |
+| ----------------------- | -------------- |
+| `s3.example.com`        | `s3:8443`      |
+| `console.example.com`   | `console:8444` |
+
+Nothing else in this guide changes. See [services.md](services.md).
+
 ---
 
 ## DNS

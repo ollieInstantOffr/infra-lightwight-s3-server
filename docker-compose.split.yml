@@ -1,0 +1,150 @@
+# Split topology: a container per role, each restartable on its own.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.split.yml up -d
+#
+# The point of it, and the thing to check after any change here:
+#
+#   docker compose restart console    # the S3 API keeps serving
+#   docker compose restart worker     # both keep serving
+#
+# This is an overlay rather than a replacement, so the single-container
+# deployment stays exactly as it was. Anyone running Pail today can ignore this
+# file entirely, and move to it when they choose to.
+#
+# What is NOT split: Postgres is still one database, the object volume is still
+# one disk, and there is still one copy of every object. This makes the console
+# restartable without dropping S3 traffic. It does not make Pail distributed.
+# See docs/services.md.
+
+services:
+  # The all-in-one container is replaced by the three roles below. Compose has
+  # no way to remove a service from an overlay, so it is scaled to zero: the
+  # definition stays, nothing runs from it, and its ports are freed for the
+  # split containers to bind.
+  s3d:
+    deploy:
+      replicas: 0
+
+  s3:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ROLE: s3
+      ENV: ${ENV:-production}
+      S3_PORT: 8443
+      # Bound even though nothing else is served on it: every role answers the
+      # health probes here, so one healthcheck works across every topology.
+      CONSOLE_PORT: 8444
+      DATA_DIR: /data
+      DATABASE_URL: postgres://s3d:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/s3d?sslmode=disable
+      PUBLIC_S3_URL: ${PUBLIC_S3_URL:?set PUBLIC_S3_URL in .env}
+      S3_DOMAIN: ${S3_DOMAIN:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      # Needed to verify a signature: SigV4 re-derives the signing key from the
+      # stored secret on every request.
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:?set CREDENTIALS_KEY in .env}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_SAMPLE_RATE: ${LOG_SAMPLE_RATE:-0.01}
+      LOG_SLOW_REQUEST_MS: ${LOG_SLOW_REQUEST_MS:-3000}
+      # Deliberately absent: SESSION_SECRET, ADMIN_EMAIL, PUBLIC_CONSOLE_URL.
+      # The S3 API serves no console and needs none of them.
+    ports:
+      - "${S3_BIND:-127.0.0.1}:8443:8443"
+    volumes:
+      - objects:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/s3d", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  console:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Deliberately NOT depending on the s3 service. Dependency ordering that
+      # cascades would mean a console restart waiting on the S3 API, which is
+      # the opposite of what this topology is for.
+    environment:
+      ROLE: console
+      ENV: ${ENV:-production}
+      CONSOLE_PORT: 8444
+      DATA_DIR: /data
+      DATABASE_URL: postgres://s3d:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/s3d?sslmode=disable
+      PUBLIC_CONSOLE_URL: ${PUBLIC_CONSOLE_URL:?set PUBLIC_CONSOLE_URL in .env}
+      # The console shows endpoint snippets and presigned links, so it needs to
+      # know the S3 URL and region even though it does not serve them.
+      PUBLIC_S3_URL: ${PUBLIC_S3_URL:?set PUBLIC_S3_URL in .env}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      # Needed to show a newly created access key once, at creation.
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:?set CREDENTIALS_KEY in .env}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_SAMPLE_RATE: ${LOG_SAMPLE_RATE:-0.01}
+      LOG_SLOW_REQUEST_MS: ${LOG_SLOW_REQUEST_MS:-3000}
+    ports:
+      - "${CONSOLE_BIND:-127.0.0.1}:8444:8444"
+    volumes:
+      # The console does write blobs: uploads, folder markers, previews and
+      # downloads all go through the object store.
+      - objects:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/s3d", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ROLE: worker
+      ENV: ${ENV:-production}
+      # No published port. The worker serves the health probes on this port
+      # inside the network and nothing else, which is the cleanest statement of
+      # what it is: the thing nobody talks to.
+      CONSOLE_PORT: 8444
+      DATA_DIR: /data
+      DATABASE_URL: postgres://s3d:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/s3d?sslmode=disable
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_SAMPLE_RATE: ${LOG_SAMPLE_RATE:-0.01}
+      LOG_SLOW_REQUEST_MS: ${LOG_SLOW_REQUEST_MS:-3000}
+      # Needed after all: the worker sends alert notifications, and the Resend
+      # API key is encrypted with this same cipher. A worker without it cannot
+      # send the alerts that are its whole reason for existing.
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:?set CREDENTIALS_KEY in .env}
+      # Deliberately absent: SESSION_SECRET, ADMIN_EMAIL, the public URLs.
+      # The worker serves nothing and builds no links.
+    volumes:
+      # Needed: the sweep unlinks reclaimed blobs, and the disk-headroom alert
+      # rule reads free space.
+      - objects:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/s3d", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

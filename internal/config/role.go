@@ -58,13 +58,19 @@ func (r Role) ServesConsole() bool { return r == RoleAll || r == RoleConsole }
 // RunsWorkers reports whether this role runs the background workers.
 func (r Role) RunsWorkers() bool { return r == RoleAll || r == RoleWorker }
 
-// NeedsCredentialsKey reports whether this role must be able to decrypt stored
-// S3 secrets.
+// NeedsCredentialsKey reports whether this role must be able to decrypt
+// secrets stored with the credentials cipher. Every role must.
 //
-// The S3 API needs it to check a signature; the console needs it to show a
-// newly created key once. The worker never does, which is the one real
-// reduction in blast radius the split buys.
-func (r Role) NeedsCredentialsKey() bool { return r.ServesS3() || r.ServesConsole() }
+// This was expected to be the split's one real blast-radius reduction, on the
+// reasoning that only the S3 API (to check a signature) and the console (to
+// show a new key once) ever decrypt anything. Running it proved otherwise: the
+// worker sends alert notifications, and the Resend API key is encrypted with
+// the same cipher, so a worker without the key cannot send the alerts that are
+// its whole reason for existing.
+//
+// Kept as a method rather than inlined so the reasoning has somewhere to live,
+// and because a future role genuinely might not need it.
+func (r Role) NeedsCredentialsKey() bool { return true }
 
 // String makes Role printable in logs and errors.
 func (r Role) String() string { return string(r) }

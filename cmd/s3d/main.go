@@ -193,25 +193,13 @@ func run() error {
 		},
 	}
 
-	// The bootstrap admin is created or promoted on every start, which is the
-	// documented way back in if the last admin is removed by accident.
-	admin, err := db.EnsureAdmin(startupCtx, pool, cfg.AdminEmail)
-	if err != nil {
-		return err
-	}
-	log.Info("bootstrap admin ready", "email", admin.Email)
-
-	// EnsureAdmin cannot invent a password, so on a fresh deployment — and on
-	// the first start after upgrading to password authentication — the admin
-	// account exists but nobody can sign in to it. Saying so here, with the
-	// command that fixes it, turns a sign-in screen that rejects everything
-	// into something self-explaining.
-	if hasPassword, err := db.HasPassword(startupCtx, pool, admin.Email); err != nil {
-		log.Warn("could not check whether the bootstrap admin has a password", "error", err)
-	} else if !hasPassword {
-		log.Warn("the bootstrap admin has no password and cannot sign in",
-			"email", admin.Email,
-			"fix", "docker compose exec s3d s3d user set-password "+admin.Email)
+	// Only the role that owns the console bootstraps the admin. An s3-only or
+	// worker container is not configured with ADMIN_EMAIL and would otherwise
+	// try to insert an empty address, which the users table rejects outright.
+	if cfg.Role.ServesConsole() {
+		if err := ensureBootstrapAdmin(startupCtx, pool, cfg, log); err != nil {
+			return err
+		}
 	}
 
 	// Email is no longer part of signing in. It carries alert notifications
@@ -256,7 +244,10 @@ func run() error {
 		return fmt.Errorf("seed alert rules: %w", err)
 	}
 
-	warnIfNoCredentials(startupCtx, pool, log)
+	// An onboarding warning, and the console is where it gets acted on.
+	if cfg.Role.ServesConsole() {
+		warnIfNoCredentials(startupCtx, pool, log)
+	}
 
 	// Signal handling is installed before the listeners so a Ctrl-C during
 	// startup is still honoured rather than killing the process outright.
@@ -399,6 +390,31 @@ func probeOnlyServer(cfg *config.Config, console *console.Server, log *slog.Logg
 			ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 		},
 	}
+}
+
+// ensureBootstrapAdmin creates or promotes the administrator named by
+// ADMIN_EMAIL, and says so when nobody can sign in as them yet.
+//
+// Promoting on every start is the documented way back in if the last admin is
+// removed by accident. EnsureAdmin cannot invent a password, so on a fresh
+// deployment the account exists but cannot be used — naming the command that
+// fixes it turns a sign-in screen that rejects everything into something
+// self-explaining.
+func ensureBootstrapAdmin(ctx context.Context, pool *db.Pool, cfg *config.Config, log *slog.Logger) error {
+	admin, err := db.EnsureAdmin(ctx, pool, cfg.AdminEmail)
+	if err != nil {
+		return err
+	}
+	log.Info("bootstrap admin ready", "email", admin.Email)
+
+	if hasPassword, err := db.HasPassword(ctx, pool, admin.Email); err != nil {
+		log.Warn("could not check whether the bootstrap admin has a password", "error", err)
+	} else if !hasPassword {
+		log.Warn("the bootstrap admin has no password and cannot sign in",
+			"email", admin.Email,
+			"fix", "docker compose exec s3d s3d user set-password "+admin.Email)
+	}
+	return nil
 }
 
 func newLogger(cfg *config.Config, sink *logs.Sink) *slog.Logger {

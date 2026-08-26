@@ -28,6 +28,27 @@ poor property for the tool you reach for when something is wrong.
   environment variable — so a rejected API key can be corrected at the moment
   alerts stop arriving, without editing `.env` and redeploying.
 
+### Separately restartable services
+
+Pail can now run as three containers instead of one, so `docker compose restart
+console` leaves the S3 API serving.
+
+- `ROLE` selects what a process runs: `all` (the default), `s3`, `console` or
+  `worker`. One binary and one image, so nothing about the build or the release
+  changes.
+- `docker-compose.split.yml` is an overlay that runs a container per role.
+- The alert engine now holds an advisory lock across an evaluation cycle. It
+  sent notifications before marking them sent, so two engines — which any
+  restart produces briefly — would both send the same email.
+- Each role is validated and configured for what it actually does. The worker
+  holds no session secret and no administrator address; the S3 API holds
+  neither of those nor any console URL.
+
+Nothing is required of anyone running the single container. It is still the
+default, and switching is adding or removing an overlay file.
+
+See **docs/services.md** for what was split and what deliberately was not.
+
 ### Upgrade notes
 
 **Nobody can sign in until a password is set.** No account has one after the
