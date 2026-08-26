@@ -124,10 +124,16 @@ func auditActions() []map[string]string {
 		{"value": db.ActionShareLink, "label": "Share link created"},
 		{"value": db.ActionCredentialCreate, "label": "Access key created"},
 		{"value": db.ActionCredentialRevoke, "label": "Access key revoked"},
-		{"value": db.ActionUserInvite, "label": "User invited"},
+		{"value": db.ActionUserCreate, "label": "User created"},
+		{"value": db.ActionPasswordChange, "label": "Password changed"},
+		{"value": db.ActionPasswordReset, "label": "Password reset"},
 		{"value": db.ActionUserRemove, "label": "User removed"},
 		{"value": db.ActionUserRole, "label": "Role changed"},
-		{"value": db.ActionInviteRevoke, "label": "Invitation withdrawn"},
+		// Invitations are gone, but entries recorded before that release are
+		// still in the log and would render as a bare action string without a
+		// label to match them.
+		{"value": db.ActionUserInvite, "label": "User invited (before 0008)"},
+		{"value": db.ActionInviteRevoke, "label": "Invitation withdrawn (before 0008)"},
 		{"value": db.ActionSessionRevoke, "label": "Session revoked"},
 	}
 }

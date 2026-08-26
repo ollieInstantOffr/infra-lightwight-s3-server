@@ -13,19 +13,14 @@ import (
 	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
 )
 
-// Authentication is passwordless. A user asks for a link, receives one by
-// email, and clicking it exchanges a single-use token for a session cookie.
-// There is no password to choose, forget, reuse or leak.
+// Authentication is by email and password, exchanged for a session cookie.
+//
+// It was previously by emailed link, which meant the console could not let
+// anyone in at all when the mail provider was unreachable or unconfigured.
+// Passwords remove that dependency; the cost is that a forgotten one has no
+// self-service recovery, which `s3d user set-password` covers from the host.
 
 const (
-	// magicLinkTTL is short on purpose. The link is a bearer credential sitting
-	// in an inbox; fifteen minutes is long enough to fetch an email and short
-	// enough that an old one in a synced mailbox is inert.
-	magicLinkTTL = 15 * time.Minute
-
-	// inviteTTL is longer because an invitation may sit unread over a weekend.
-	inviteTTL = 7 * 24 * time.Hour
-
 	// sessionIdleTTL logs out an inactive browser; sessionAbsoluteTTL is the
 	// hard ceiling a session can never be extended past, no matter how active.
 	sessionIdleTTL     = 12 * time.Hour
@@ -33,11 +28,16 @@ const (
 
 	sessionCookieName = "s3d_session"
 
-	// magicLinkRateWindow and magicLinkRateLimit bound how often a single
-	// address can be mailed. Without this the endpoint is an open relay for
-	// flooding someone's inbox, since anyone can name any address.
-	magicLinkRateWindow = 15 * time.Minute
-	magicLinkRateLimit  = 5
+	// loginFailureWindow is how far back failed attempts are counted. A lockout
+	// therefore expires on its own rather than needing an administrator.
+	loginFailureWindow = 15 * time.Minute
+
+	// The two limits are deliberately different. The per-address one is tight,
+	// because a real person mistyping their own password does not reach ten.
+	// The per-IP one is looser, because an office behind one NAT address is a
+	// legitimate source of many sign-ins and must not lock itself out.
+	loginFailureLimitPerEmail = 10
+	loginFailureLimitPerIP    = 50
 
 	maxAuthBodySize = 4 << 10
 )
@@ -53,123 +53,82 @@ func UserFrom(ctx context.Context) (*db.User, bool) {
 	return user, ok
 }
 
-type magicLinkRequest struct {
-	Email string `json:"email"`
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
-// handleRequestMagicLink issues a sign-in link.
+// signInFailed is the only thing a failed sign-in ever says.
 //
-// The response is identical whether or not the address is known. Anything else
-// turns this endpoint into a way to test which addresses have accounts, and it
-// is unauthenticated by necessity.
-func (s *Server) handleRequestMagicLink(w http.ResponseWriter, r *http.Request) {
-	var request magicLinkRequest
+// It covers an unknown address, a wrong password, and an account that has no
+// password set. Distinguishing them would tell an unauthenticated caller which
+// addresses have accounts, which is the same reason the magic-link endpoint it
+// replaced answered identically whether or not the address was known.
+const signInFailed = "That email address or password is not correct."
+
+// handleLogin exchanges an email and password for a session.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// Sign-in is unauthenticated, so it sits outside requireSession and does
+	// not inherit its CSRF check. A cross-site post here could log someone into
+	// an account the attacker controls, which is a real attack: everything they
+	// then do in the console is attributed to them.
+	if !s.originAllowed(r) {
+		s.Log.Warn("rejected a cross-origin sign-in", "origin", r.Header.Get("Origin"))
+		writeError(w, http.StatusForbidden, "This request did not come from the console.")
+		return
+	}
+
+	var request loginRequest
 	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "Send a JSON body with an email address.")
+		writeError(w, http.StatusBadRequest, "Send a JSON body with an email address and a password.")
 		return
 	}
 
+	ctx := r.Context()
 	email := db.NormalizeEmail(request.Email)
-	// Deliberately vague, and the same shape as the success case.
-	const accepted = "If that address can sign in, a link is on its way."
+	ip := s.Proxies.ClientIP(r)
 
-	if !looksLikeEmail(email) {
-		writeJSON(w, http.StatusOK, map[string]string{"message": accepted})
-		return
-	}
-
-	ctx := r.Context()
-	allowed, err := s.maySignIn(ctx, email)
+	byEmail, byIP, err := db.CountRecentFailures(ctx, s.DB, email, ip, loginFailureWindow)
 	if err != nil {
-		s.internalError(w, r, "check sign-in eligibility", err)
+		s.internalError(w, r, "count sign-in failures", err)
 		return
 	}
-	if !allowed {
-		// Logged so an operator can see attempts, but the caller learns nothing.
-		s.Log.Info("sign-in requested for an address that cannot sign in",
-			"email", email, "ip", s.Proxies.ClientIP(r))
-		writeJSON(w, http.StatusOK, map[string]string{"message": accepted})
+	if byEmail >= loginFailureLimitPerEmail || byIP >= loginFailureLimitPerIP {
+		s.Log.Warn("sign-in throttled",
+			"email", email, "ip", ip, "byEmail", byEmail, "byIP", byIP)
+		// Recorded so a sustained attack keeps the lockout alive rather than
+		// letting it lapse while the attacker keeps trying.
+		s.recordAttempt(ctx, email, ip, false)
+		writeError(w, http.StatusTooManyRequests,
+			"Too many sign-in attempts. Please wait a few minutes and try again.")
 		return
 	}
 
-	recent, err := db.CountRecentMagicLinks(ctx, s.DB, email, magicLinkRateWindow)
+	user, err := db.VerifyPassword(ctx, s.DB, email, request.Password)
 	if err != nil {
-		s.internalError(w, r, "count recent magic links", err)
-		return
-	}
-	if recent >= magicLinkRateLimit {
-		s.Log.Warn("magic link rate limit reached",
-			"email", email, "ip", s.Proxies.ClientIP(r), "window", magicLinkRateWindow)
-		// Still the same response: revealing the limit would reveal the address
-		// exists.
-		writeJSON(w, http.StatusOK, map[string]string{"message": accepted})
-		return
-	}
-
-	token, hash, err := db.NewToken()
-	if err != nil {
-		s.internalError(w, r, "generate token", err)
-		return
-	}
-	if err := db.CreateMagicLink(ctx, s.DB, email, hash, magicLinkTTL, s.Proxies.ClientIP(r)); err != nil {
-		s.internalError(w, r, "create magic link", err)
-		return
-	}
-
-	link := s.PublicURL + "/api/auth/callback?token=" + url.QueryEscape(token)
-	subject, text, htmlBody := magicLinkEmail(link, magicLinkTTL)
-	if err := s.Mailer.Send(ctx, email, subject, text, htmlBody); err != nil {
-		// A send failure is a real error worth reporting: the user would
-		// otherwise wait for an email that is never coming.
-		s.Log.Error("could not send sign-in email", "email", email, "error", err)
-		writeError(w, http.StatusBadGateway, "The sign-in email could not be sent. Please try again shortly.")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"message": accepted})
-}
-
-// maySignIn reports whether an address is entitled to a link: an existing user,
-// or someone holding a live invitation.
-func (s *Server) maySignIn(ctx context.Context, email string) (bool, error) {
-	if _, err := db.GetUserByEmail(ctx, s.DB, email); err == nil {
-		return true, nil
-	} else if !errors.Is(err, db.ErrUserNotFound) {
-		return false, err
-	}
-	return db.HasPendingInvite(ctx, s.DB, email)
-}
-
-// handleCallback exchanges a token for a session and redirects into the app.
-func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		s.redirectWithError(w, r, "missing")
-		return
-	}
-	ctx := r.Context()
-
-	email, err := db.ConsumeMagicLink(ctx, s.DB, db.HashToken(token))
-	if err != nil {
-		if errors.Is(err, db.ErrTokenInvalid) {
-			// Covers unknown, expired and already-used alike. A user who clicks
-			// twice sees the same thing as one with a stale link, which is both
-			// simpler to explain and safer.
-			s.redirectWithError(w, r, "expired")
+		s.recordAttempt(ctx, email, ip, false)
+		switch {
+		case errors.Is(err, db.ErrPasswordUnset):
+			// Worth an operator seeing: it means an account exists that nobody
+			// can use, which on a fresh deployment is the bootstrap admin and
+			// is fixed by one command. The caller still learns nothing.
+			s.Log.Warn("sign-in attempted for an account with no password set",
+				"email", email, "ip", ip, "fix", "s3d user set-password "+email)
+		case errors.Is(err, db.ErrPasswordIncorrect):
+			s.Log.Info("failed sign-in", "email", email, "ip", ip)
+		default:
+			s.internalError(w, r, "verify password", err)
 			return
 		}
-		s.internalError(w, r, "consume magic link", err)
+		writeError(w, http.StatusUnauthorized, signInFailed)
 		return
 	}
 
-	user, err := s.resolveUser(ctx, email)
-	if err != nil {
-		if errors.Is(err, db.ErrUserNotFound) {
-			s.redirectWithError(w, r, "not-invited")
-			return
-		}
-		s.internalError(w, r, "resolve user", err)
-		return
+	s.recordAttempt(ctx, email, ip, true)
+	// A successful sign-in clears the count, so someone who mistypes twice and
+	// then succeeds is not left part-way to a lockout for the rest of the window.
+	if err := db.ClearLoginFailures(ctx, s.DB, email); err != nil {
+		s.Log.Warn("could not clear sign-in failures", "email", email, "error", err)
 	}
 
 	if err := s.startSession(w, r, user); err != nil {
@@ -177,37 +136,22 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.RecordLogin(ctx, s.DB, user.ID); err != nil {
-		// Cosmetic; never worth failing a login over.
+		// Cosmetic; never worth failing a sign-in over.
 		s.Log.Warn("could not record login", "user", user.Email, "error", err)
 	}
 
-	s.Log.Info("signed in", "email", user.Email, "ip", s.Proxies.ClientIP(r))
-	s.auditFor(r.Context(), user, db.ActionSignIn, "user", user.Email,
-		s.Proxies.ClientIP(r), r.UserAgent(), nil)
-	http.Redirect(w, r, s.PublicURL+"/", http.StatusSeeOther)
+	s.Log.Info("signed in", "email", user.Email, "ip", ip)
+	s.auditFor(ctx, user, db.ActionSignIn, "user", user.Email, ip, r.UserAgent(), nil)
+	writeJSON(w, http.StatusOK, userResponse(user))
 }
 
-// resolveUser finds the account for a verified address, creating it if the
-// address holds an unredeemed invitation. Accepting the invite here rather than
-// on a separate screen means a single click both admits and signs in.
-func (s *Server) resolveUser(ctx context.Context, email string) (*db.User, error) {
-	user, err := db.GetUserByEmail(ctx, s.DB, email)
-	if err == nil {
-		return user, nil
+// recordAttempt writes an attempt for throttling. A failure to record is
+// logged rather than returned: it must not turn a wrong password into a 500,
+// and it must not stop a correct one from signing in.
+func (s *Server) recordAttempt(ctx context.Context, email, ip string, successful bool) {
+	if err := db.RecordLoginAttempt(ctx, s.DB, email, ip, successful); err != nil {
+		s.Log.Warn("could not record sign-in attempt", "email", email, "error", err)
 	}
-	if !errors.Is(err, db.ErrUserNotFound) {
-		return nil, err
-	}
-
-	pending, err := db.HasPendingInvite(ctx, s.DB, email)
-	if err != nil {
-		return nil, err
-	}
-	if !pending {
-		return nil, db.ErrUserNotFound
-	}
-	// The invitation's role is applied, so an admin can invite another admin.
-	return db.CreateUser(ctx, s.DB, email, db.RoleMember)
 }
 
 // startSession issues a session cookie.
@@ -292,6 +236,19 @@ func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		// A user whose password was chosen by someone else may do exactly two
+		// things: change it, or leave. Enforcing it here rather than in the app
+		// is what makes it unavoidable — a forced change that can be skipped by
+		// navigating elsewhere, or by calling the API directly, is not forced.
+		if user.MustChangePassword && !isPasswordChangeRequest(r) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "Choose a new password before continuing.",
+				// The app routes on this rather than matching the message.
+				"code": codePasswordChangeRequired,
+			})
+			return
+		}
+
 		// Every state-changing request must also prove it did not originate
 		// from another site.
 		if isStateChanging(r) && !s.originAllowed(r) {
@@ -303,6 +260,23 @@ func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 
 		next(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
 	}
+}
+
+// codePasswordChangeRequired is returned alongside the message so the app can
+// route to the change screen without string-matching prose that may be reworded.
+const codePasswordChangeRequired = "password_change_required"
+
+// isPasswordChangeRequest reports whether a request is one of the two things a
+// user with a forced password change is still allowed to do.
+//
+// /api/auth/me is included because the app calls it to discover it is in this
+// state at all; refusing it would leave the console unable to explain itself.
+func isPasswordChangeRequest(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/api/account/password", "/api/auth/logout", "/api/auth/me":
+		return true
+	}
+	return false
 }
 
 // requireAdmin additionally demands the admin role.
@@ -382,6 +356,9 @@ func userResponse(user *db.User) map[string]any {
 		"isAdmin":     user.IsAdmin(),
 		"createdAt":   user.CreatedAt,
 		"lastLoginAt": user.LastLoginAt,
+		// The app needs this to route to the change screen; it describes the
+		// person receiving it and tells them nothing they do not already know.
+		"mustChangePassword": user.MustChangePassword,
 	}
 }
 

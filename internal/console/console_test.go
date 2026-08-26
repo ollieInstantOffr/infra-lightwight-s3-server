@@ -90,6 +90,9 @@ func newConsole(t *testing.T) *consoleFixture {
 	for _, stmt := range []string{
 		`DELETE FROM buckets`, `DELETE FROM blobs`, `DELETE FROM credentials`,
 		`DELETE FROM sessions`, `DELETE FROM magic_links`, `DELETE FROM invites`, `DELETE FROM users`,
+		// Shared schema again: without this, the throttle tests leave failures
+		// behind that lock every later test out of signing in.
+		`DELETE FROM login_attempts`,
 		// request_logs and request_metrics are shared across every test in this
 		// package (one schema, test_console_pkg) — without clearing them, a
 		// test that seeds either accumulates rows from every prior run rather
@@ -105,6 +108,11 @@ func newConsole(t *testing.T) *consoleFixture {
 	admin, err := db.EnsureAdmin(ctx, pool, "admin@example.com")
 	if err != nil {
 		t.Fatalf("EnsureAdmin: %v", err)
+	}
+	// EnsureAdmin cannot invent a password, so the fixture sets one the way
+	// `s3d user set-password` does on a real deployment.
+	if err := db.SetPassword(ctx, pool, admin.ID, testAdminPassword, false); err != nil {
+		t.Fatalf("SetPassword: %v", err)
 	}
 
 	cipher, err := secrets.NewCipher("console-test-credentials-key-32-chars-ok")
@@ -182,44 +190,26 @@ func (c *consoleFixture) do(t *testing.T, method, path string, payload any) (int
 	return response.StatusCode, decoded
 }
 
-// signIn performs the whole magic-link flow and leaves the client holding a
-// session cookie.
+// testAdminPassword is the bootstrap admin's password in every fixture.
+const testAdminPassword = "fixture-admin-password"
+
+// signIn leaves the client holding a session cookie.
 func (c *consoleFixture) signIn(t *testing.T, email string) {
 	t.Helper()
-
-	status, _ := c.do(t, http.MethodPost, "/api/auth/magic-link", map[string]string{"email": email})
-	if status != http.StatusOK {
-		t.Fatalf("requesting a sign-in link returned %d", status)
-	}
-
-	link := extractLink(t, c.mailer.last(t).text)
-	response, err := c.client.Get(link)
-	if err != nil {
-		t.Fatalf("follow sign-in link: %v", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusSeeOther {
-		t.Fatalf("sign-in link returned %d, want 303", response.StatusCode)
-	}
-	if location := response.Header.Get("Location"); strings.Contains(location, "error=") {
-		t.Fatalf("sign-in failed: %s", location)
-	}
+	c.signInWith(t, email, testAdminPassword)
 }
 
-// extractLink pulls the callback URL out of an email body.
-func extractLink(t *testing.T, body string) string {
+// signInWith is the same, for tests that care which password was used.
+func (c *consoleFixture) signInWith(t *testing.T, email, password string) {
 	t.Helper()
-	for _, field := range strings.Fields(body) {
-		if strings.Contains(field, "/api/auth/callback?token=") {
-			return field
-		}
+	status, body := c.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"email": email, "password": password})
+	if status != http.StatusOK {
+		t.Fatalf("signing in as %s returned %d: %v", email, status, body)
 	}
-	t.Fatalf("no sign-in link found in the email:\n%s", body)
-	return ""
 }
 
-func TestMagicLinkSignIn(t *testing.T) {
+func TestPasswordSignIn(t *testing.T) {
 	c := newConsole(t)
 	c.signIn(t, "admin@example.com")
 
@@ -235,74 +225,103 @@ func TestMagicLinkSignIn(t *testing.T) {
 	}
 }
 
-// A link is a bearer credential. Using one twice must fail, or an old email in
-// a synced mailbox stays a way in forever.
-func TestMagicLinkIsSingleUse(t *testing.T) {
+func TestSignInRejectsTheWrongPassword(t *testing.T) {
 	c := newConsole(t)
 
-	status, _ := c.do(t, http.MethodPost, "/api/auth/magic-link", map[string]string{"email": "admin@example.com"})
-	if status != http.StatusOK {
-		t.Fatalf("requesting a link returned %d", status)
+	status, _ := c.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"email": "admin@example.com", "password": "not-the-password"})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("a wrong password returned %d, want 401", status)
 	}
-	link := extractLink(t, c.mailer.last(t).text)
-
-	first, err := c.client.Get(link)
-	if err != nil {
-		t.Fatalf("first use: %v", err)
-	}
-	first.Body.Close()
-	if strings.Contains(first.Header.Get("Location"), "error=") {
-		t.Fatalf("the first use of the link failed: %s", first.Header.Get("Location"))
-	}
-
-	second, err := c.client.Get(link)
-	if err != nil {
-		t.Fatalf("second use: %v", err)
-	}
-	defer second.Body.Close()
-	if !strings.Contains(second.Header.Get("Location"), "error=expired") {
-		t.Errorf("the link worked twice; Location = %q", second.Header.Get("Location"))
+	// And no session was issued.
+	if meStatus, _ := c.do(t, http.MethodGet, "/api/auth/me", nil); meStatus != http.StatusUnauthorized {
+		t.Errorf("/api/auth/me returned %d after a failed sign-in, want 401", meStatus)
 	}
 }
 
 // The endpoint is unauthenticated by necessity, so it must not reveal which
-// addresses have accounts.
-func TestMagicLinkDoesNotRevealWhoHasAnAccount(t *testing.T) {
+// addresses have accounts — the same property the magic-link endpoint it
+// replaced had to hold.
+func TestSignInDoesNotRevealWhoHasAnAccount(t *testing.T) {
 	c := newConsole(t)
 
-	knownStatus, knownBody := c.do(t, http.MethodPost, "/api/auth/magic-link",
-		map[string]string{"email": "admin@example.com"})
-	unknownStatus, unknownBody := c.do(t, http.MethodPost, "/api/auth/magic-link",
-		map[string]string{"email": "stranger@example.com"})
+	knownStatus, knownBody := c.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"email": "admin@example.com", "password": "wrong-password-here"})
+	unknownStatus, unknownBody := c.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"email": "stranger@example.com", "password": "wrong-password-here"})
 
 	if knownStatus != unknownStatus {
 		t.Errorf("status differs: known %d, unknown %d", knownStatus, unknownStatus)
 	}
 	if fmt.Sprint(knownBody) != fmt.Sprint(unknownBody) {
-		t.Errorf("response differs:\n known: %v\n unknown: %v", knownBody, unknownBody)
-	}
-	// And crucially, no email was sent to the stranger.
-	if c.mailer.count() != 1 {
-		t.Errorf("%d emails sent, want 1 — a stranger was mailed", c.mailer.count())
+		t.Errorf("response differs and would reveal which addresses exist:\n known: %v\n unknown: %v",
+			knownBody, unknownBody)
 	}
 }
 
-// Anyone can name any address here, so without a limit this is a way to flood
-// someone's inbox.
-func TestMagicLinkIsRateLimited(t *testing.T) {
+// An account that exists but has no password — every account does, immediately
+// after the 0008 migration — must be refused, and refused indistinguishably.
+func TestAnAccountWithNoPasswordCannotSignIn(t *testing.T) {
 	c := newConsole(t)
+	ctx := context.Background()
 
-	for i := range magicLinkRateLimit + 3 {
-		status, _ := c.do(t, http.MethodPost, "/api/auth/magic-link",
-			map[string]string{"email": "admin@example.com"})
-		if status != http.StatusOK {
-			t.Fatalf("request %d returned %d", i, status)
-		}
+	if _, err := db.CreateUser(ctx, c.pool, "nopassword@example.com", db.RoleMember); err != nil {
+		t.Fatalf("CreateUser: %v", err)
 	}
 
-	if sent := c.mailer.count(); sent > magicLinkRateLimit {
-		t.Errorf("%d emails sent for %d requests; the limit of %d was not enforced",
-			sent, magicLinkRateLimit+3, magicLinkRateLimit)
+	status, body := c.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"email": "nopassword@example.com", "password": "anything-at-all"})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("an account with no password returned %d, want 401", status)
+	}
+	if body["error"] != signInFailed {
+		t.Errorf("error was %q, which differs from an ordinary failure and reveals the account exists",
+			body["error"])
+	}
+}
+
+// Without a bound, the endpoint is an offline password cracker with unlimited
+// attempts.
+func TestSignInIsThrottled(t *testing.T) {
+	c := newConsole(t)
+
+	var lastStatus int
+	for i := 0; i < loginFailureLimitPerEmail+2; i++ {
+		lastStatus, _ = c.do(t, http.MethodPost, "/api/auth/login",
+			map[string]string{"email": "admin@example.com", "password": "wrong-every-time"})
+	}
+	if lastStatus != http.StatusTooManyRequests {
+		t.Fatalf("after %d failures the status was %d, want 429",
+			loginFailureLimitPerEmail+2, lastStatus)
+	}
+
+	// And the throttle holds even once the right password is offered, or it
+	// would be no bound at all.
+	status, _ := c.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"email": "admin@example.com", "password": testAdminPassword})
+	if status != http.StatusTooManyRequests {
+		t.Errorf("the correct password bypassed the throttle with %d, want 429", status)
+	}
+}
+
+// A successful sign-in has to clear the count, or a user who mistypes a few
+// times and then succeeds stays part-way to a lockout.
+func TestASuccessfulSignInClearsTheFailureCount(t *testing.T) {
+	c := newConsole(t)
+
+	for i := 0; i < loginFailureLimitPerEmail-1; i++ {
+		c.do(t, http.MethodPost, "/api/auth/login",
+			map[string]string{"email": "admin@example.com", "password": "wrong"})
+	}
+	c.signIn(t, "admin@example.com")
+
+	// Fresh failures must start from zero rather than tripping immediately.
+	for i := 0; i < loginFailureLimitPerEmail-1; i++ {
+		status, _ := c.do(t, http.MethodPost, "/api/auth/login",
+			map[string]string{"email": "admin@example.com", "password": "wrong"})
+		if status == http.StatusTooManyRequests {
+			t.Fatalf("throttled on failure %d after a successful sign-in should have cleared the count", i+1)
+		}
 	}
 }
 
@@ -358,15 +377,20 @@ func TestLogoutRevokesTheSessionServerSide(t *testing.T) {
 func TestSessionCookieIsHardened(t *testing.T) {
 	c := newConsole(t)
 
-	status, _ := c.do(t, http.MethodPost, "/api/auth/magic-link", map[string]string{"email": "admin@example.com"})
-	if status != http.StatusOK {
-		t.Fatalf("requesting a link returned %d", status)
-	}
-	response, err := c.client.Get(extractLink(t, c.mailer.last(t).text))
+	payload, err := json.Marshal(map[string]string{
+		"email": "admin@example.com", "password": testAdminPassword,
+	})
 	if err != nil {
-		t.Fatalf("follow link: %v", err)
+		t.Fatalf("marshal: %v", err)
+	}
+	response, err := c.client.Post(c.url+"/api/auth/login", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("signing in returned %d", response.StatusCode)
+	}
 
 	for _, cookie := range response.Cookies() {
 		if cookie.Name != sessionCookieName {
@@ -375,8 +399,9 @@ func TestSessionCookieIsHardened(t *testing.T) {
 		if !cookie.HttpOnly {
 			t.Error("the session cookie is not HttpOnly, so a script could read it")
 		}
-		// Lax rather than Strict, because the sign-in link is followed from an
-		// email client and Strict would drop the cookie on that navigation.
+		// Lax rather than Strict so a top-level navigation into the console
+		// from an external link still carries the session; Strict would drop
+		// it and show a signed-out console until the user reloaded.
 		if cookie.SameSite != http.SameSiteLaxMode {
 			t.Errorf("SameSite = %v, want Lax", cookie.SameSite)
 		}
@@ -406,44 +431,189 @@ func TestCrossOriginWritesAreRejected(t *testing.T) {
 	}
 }
 
-func TestInviteFlow(t *testing.T) {
+func TestCreateUserFlow(t *testing.T) {
 	c := newConsole(t)
 	c.signIn(t, "admin@example.com")
 
-	status, _ := c.do(t, http.MethodPost, "/api/users/invite",
+	status, body := c.do(t, http.MethodPost, "/api/users",
 		map[string]string{"email": "colleague@example.com", "role": db.RoleMember})
 	if status != http.StatusCreated {
-		t.Fatalf("inviting returned %d", status)
+		t.Fatalf("creating a user returned %d: %v", status, body)
 	}
 
-	// The invited address can now sign in; the link goes through the same
-	// callback, so accepting and signing in are one click.
-	invited := newClientFor(t, c)
-	invited.signIn(t, "colleague@example.com")
+	// The starting password comes back once, and is the only copy: the server
+	// stores a hash.
+	password, _ := body["password"].(string)
+	if password == "" {
+		t.Fatal("no starting password was returned, so the account cannot be handed over")
+	}
 
-	status, body := invited.do(t, http.MethodGet, "/api/auth/me", nil)
+	created := newClientFor(t, c)
+	created.signInWith(t, "colleague@example.com", password)
+
+	status, me := created.do(t, http.MethodGet, "/api/auth/me", nil)
 	if status != http.StatusOK {
-		t.Fatalf("the invited user could not read their own profile: %d", status)
+		t.Fatalf("the new user could not read their own profile: %d", status)
 	}
-	if body["email"] != "colleague@example.com" {
-		t.Errorf("signed in as %v", body["email"])
+	if me["email"] != "colleague@example.com" {
+		t.Errorf("signed in as %v", me["email"])
 	}
-	if body["isAdmin"] != false {
-		t.Error("an invited member was made an admin")
+	if me["isAdmin"] != false {
+		t.Error("a new member was made an admin")
+	}
+	// An administrator chose this password, so it is a shared secret until the
+	// owner replaces it.
+	if me["mustChangePassword"] != true {
+		t.Error("a password set by an administrator did not come back flagged for change")
 	}
 }
 
-// An address with no account and no invitation must not be able to sign in.
-func TestUninvitedAddressCannotSignIn(t *testing.T) {
+// An address with no account must not be able to sign in, whatever it sends.
+func TestAnAddressWithNoAccountCannotSignIn(t *testing.T) {
 	c := newConsole(t)
 
-	status, _ := c.do(t, http.MethodPost, "/api/auth/magic-link",
-		map[string]string{"email": "stranger@example.com"})
-	if status != http.StatusOK {
-		t.Fatalf("requesting a link returned %d", status)
+	status, _ := c.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"email": "stranger@example.com", "password": testAdminPassword})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("an unknown address returned %d, want 401", status)
 	}
-	if c.mailer.count() != 0 {
-		t.Fatal("an email was sent to an address with no account and no invitation")
+}
+
+// A user whose password was chosen for them may change it and leave, and
+// nothing else. Enforced server-side, because a check that only lives in the
+// app is bypassed by calling the API directly.
+func TestAForcedPasswordChangeCannotBeSkipped(t *testing.T) {
+	c := newConsole(t)
+	c.signIn(t, "admin@example.com")
+
+	_, body := c.do(t, http.MethodPost, "/api/users",
+		map[string]string{"email": "forced@example.com", "role": db.RoleMember})
+	password, _ := body["password"].(string)
+
+	forced := newClientFor(t, c)
+	forced.signInWith(t, "forced@example.com", password)
+
+	// Every ordinary route is refused, with a code the app can route on.
+	for _, path := range []string{"/api/buckets", "/api/credentials", "/api/dashboard"} {
+		status, refused := forced.do(t, http.MethodGet, path, nil)
+		if status != http.StatusForbidden {
+			t.Errorf("GET %s with a forced change pending returned %d, want 403", path, status)
+		}
+		if refused["code"] != codePasswordChangeRequired {
+			t.Errorf("GET %s returned code %v, want %q", path, refused["code"], codePasswordChangeRequired)
+		}
+	}
+
+	// But the two things they are allowed to do still work.
+	if status, _ := forced.do(t, http.MethodGet, "/api/auth/me", nil); status != http.StatusOK {
+		t.Errorf("/api/auth/me was refused with %d, leaving the app unable to explain itself", status)
+	}
+
+	status, changed := forced.do(t, http.MethodPost, "/api/account/password",
+		map[string]string{"currentPassword": password, "newPassword": "a-brand-new-password"})
+	if status != http.StatusOK {
+		t.Fatalf("changing the password returned %d: %v", status, changed)
+	}
+
+	// And the block lifts.
+	if status, _ := forced.do(t, http.MethodGet, "/api/buckets", nil); status != http.StatusOK {
+		t.Errorf("GET /api/buckets after the change returned %d, want 200", status)
+	}
+}
+
+// Re-entering the administrator's password would clear the flag while leaving
+// the shared secret in place, which is the one case the flag exists to prevent.
+func TestAForcedChangeRefusesTheSamePassword(t *testing.T) {
+	c := newConsole(t)
+	c.signIn(t, "admin@example.com")
+
+	_, body := c.do(t, http.MethodPost, "/api/users",
+		map[string]string{"email": "same@example.com", "role": db.RoleMember})
+	password, _ := body["password"].(string)
+
+	forced := newClientFor(t, c)
+	forced.signInWith(t, "same@example.com", password)
+
+	status, _ := forced.do(t, http.MethodPost, "/api/account/password",
+		map[string]string{"currentPassword": password, "newPassword": password})
+	if status != http.StatusBadRequest {
+		t.Errorf("reusing the same password returned %d, want 400", status)
+	}
+}
+
+// Changing a password must end every other session. If the reason for changing
+// it is that somebody else had it, leaving their session alive defeats the point.
+func TestChangingAPasswordSignsOutOtherSessions(t *testing.T) {
+	c := newConsole(t)
+	c.signIn(t, "admin@example.com")
+
+	// A second browser for the same account.
+	other := newClientFor(t, c)
+	other.signIn(t, "admin@example.com")
+	if status, _ := other.do(t, http.MethodGet, "/api/auth/me", nil); status != http.StatusOK {
+		t.Fatal("the second session was not established")
+	}
+
+	status, body := c.do(t, http.MethodPost, "/api/account/password",
+		map[string]string{"currentPassword": testAdminPassword, "newPassword": "an-entirely-new-password"})
+	if status != http.StatusOK {
+		t.Fatalf("changing the password returned %d: %v", status, body)
+	}
+
+	if status, _ := other.do(t, http.MethodGet, "/api/auth/me", nil); status != http.StatusUnauthorized {
+		t.Errorf("the other session survived the password change with %d, want 401", status)
+	}
+	// The session that made the change keeps working.
+	if status, _ := c.do(t, http.MethodGet, "/api/auth/me", nil); status != http.StatusOK {
+		t.Errorf("the changing session was signed out with %d", status)
+	}
+}
+
+// A stolen session must not be enough to change the password: without the
+// current one, a thief could lock the real owner out of their own account.
+func TestChangingAPasswordNeedsTheCurrentOne(t *testing.T) {
+	c := newConsole(t)
+	c.signIn(t, "admin@example.com")
+
+	status, _ := c.do(t, http.MethodPost, "/api/account/password",
+		map[string]string{"currentPassword": "not-the-current-one", "newPassword": "a-new-password-here"})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("changing without the current password returned %d, want 401", status)
+	}
+	// The old password still works, so nothing was changed.
+	fresh := newClientFor(t, c)
+	fresh.signIn(t, "admin@example.com")
+}
+
+// An administrator resetting someone's password must also end their sessions:
+// the old password is no longer trusted, so neither is anything signed in with it.
+func TestAnAdminResetSignsTheUserOut(t *testing.T) {
+	c := newConsole(t)
+	c.signIn(t, "admin@example.com")
+
+	_, created := c.do(t, http.MethodPost, "/api/users",
+		map[string]string{"email": "reset-me@example.com", "role": db.RoleMember})
+	password, _ := created["password"].(string)
+	userID, _ := created["user"].(map[string]any)["id"].(string)
+
+	victim := newClientFor(t, c)
+	victim.signInWith(t, "reset-me@example.com", password)
+	// Clear the forced-change flag so the 401 below cannot be the flag's 403.
+	if status, _ := victim.do(t, http.MethodPost, "/api/account/password",
+		map[string]string{"currentPassword": password, "newPassword": "chosen-by-the-owner"}); status != http.StatusOK {
+		t.Fatalf("the user could not set their own password: %d", status)
+	}
+
+	status, reset := c.do(t, http.MethodPost, "/api/users/"+userID+"/password", nil)
+	if status != http.StatusOK {
+		t.Fatalf("resetting returned %d: %v", status, reset)
+	}
+	if reset["password"] == "" || reset["password"] == nil {
+		t.Error("no new password was returned, so it cannot be handed over")
+	}
+
+	if status, _ := victim.do(t, http.MethodGet, "/api/auth/me", nil); status != http.StatusUnauthorized {
+		t.Errorf("the user's session survived an administrator reset with %d, want 401", status)
 	}
 }
 
@@ -451,20 +621,28 @@ func TestUninvitedAddressCannotSignIn(t *testing.T) {
 func TestMembersCannotAdminister(t *testing.T) {
 	c := newConsole(t)
 	c.signIn(t, "admin@example.com")
-	if status, _ := c.do(t, http.MethodPost, "/api/users/invite",
-		map[string]string{"email": "member@example.com"}); status != http.StatusCreated {
-		t.Fatalf("inviting returned %d", status)
+	status, created := c.do(t, http.MethodPost, "/api/users",
+		map[string]string{"email": "member@example.com", "role": db.RoleMember})
+	if status != http.StatusCreated {
+		t.Fatalf("creating a member returned %d: %v", status, created)
 	}
+	password, _ := created["password"].(string)
 
 	member := newClientFor(t, c)
-	member.signIn(t, "member@example.com")
+	member.signInWith(t, "member@example.com", password)
+	// Clear the forced change, or every call below returns 403 for that reason
+	// rather than because the member lacks the role.
+	if status, _ := member.do(t, http.MethodPost, "/api/account/password",
+		map[string]string{"currentPassword": password, "newPassword": "member-chosen-password"}); status != http.StatusOK {
+		t.Fatalf("the member could not set their own password: %d", status)
+	}
 
 	for _, call := range []struct {
 		method, path string
 		payload      any
 	}{
 		{http.MethodGet, "/api/users", nil},
-		{http.MethodPost, "/api/users/invite", map[string]string{"email": "another@example.com"}},
+		{http.MethodPost, "/api/users", map[string]string{"email": "another@example.com"}},
 		{http.MethodGet, "/api/credentials", nil},
 		{http.MethodPost, "/api/credentials", map[string]string{"description": "sneaky"}},
 	} {
@@ -743,30 +921,5 @@ func TestReadyzReportsDependencies(t *testing.T) {
 	checks, _ := body["checks"].(map[string]any)
 	if checks["database"] != "ok" || checks["storage"] != "ok" {
 		t.Errorf("checks = %v", checks)
-	}
-}
-
-func TestSignInEmailContainsAWorkingLink(t *testing.T) {
-	c := newConsole(t)
-
-	if status, _ := c.do(t, http.MethodPost, "/api/auth/magic-link",
-		map[string]string{"email": "admin@example.com"}); status != http.StatusOK {
-		t.Fatal("requesting a link failed")
-	}
-
-	message := c.mailer.last(t)
-	if message.to != "admin@example.com" {
-		t.Errorf("sent to %q", message.to)
-	}
-	if !strings.Contains(message.subject, "sign-in") && !strings.Contains(message.subject, "Sign-in") {
-		t.Errorf("subject = %q", message.subject)
-	}
-	// A plain-text body matters: some clients strip HTML entirely, and a blank
-	// login email is indistinguishable from one that never arrived.
-	if !strings.Contains(message.text, "/api/auth/callback?token=") {
-		t.Errorf("the plain-text body has no sign-in link:\n%s", message.text)
-	}
-	if !strings.Contains(message.text, "15 minutes") {
-		t.Errorf("the email does not say how long the link lasts:\n%s", message.text)
 	}
 }

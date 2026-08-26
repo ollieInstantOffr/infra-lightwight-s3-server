@@ -102,18 +102,16 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	// Authentication. Open by necessity: these are how a session is obtained.
-	mux.HandleFunc("POST /api/auth/magic-link", s.handleRequestMagicLink)
-	mux.HandleFunc("GET /api/auth/callback", s.handleCallback)
+	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/auth/me", s.requireSession(s.handleMe))
 
 	// Users and invitations.
 	mux.HandleFunc("GET /api/users", s.requireAdmin(s.handleListUsers))
-	mux.HandleFunc("POST /api/users/invite", s.requireAdmin(s.handleInvite))
+	mux.HandleFunc("POST /api/users", s.requireAdmin(s.handleCreateUser))
+	mux.HandleFunc("POST /api/users/{id}/password", s.requireAdmin(s.handleResetPassword))
 	mux.HandleFunc("DELETE /api/users/{id}", s.requireAdmin(s.handleDeleteUser))
 	mux.HandleFunc("PUT /api/users/{id}/role", s.requireAdmin(s.handleSetRole))
-	mux.HandleFunc("GET /api/invites", s.requireAdmin(s.handleListInvites))
-	mux.HandleFunc("DELETE /api/invites/{id}", s.requireAdmin(s.handleRevokeInvite))
 
 	// S3 credentials.
 	mux.HandleFunc("GET /api/credentials", s.requireAdmin(s.handleListCredentials))
@@ -147,6 +145,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/audit", s.requireAdmin(s.handleAuditLog))
 
 	// Account and sessions.
+	mux.HandleFunc("POST /api/account/password", s.requireSession(s.handleChangePassword))
 	mux.HandleFunc("GET /api/account/sessions", s.requireSession(s.handleListSessions))
 	mux.HandleFunc("DELETE /api/account/sessions/{id}", s.requireSession(s.handleRevokeSession))
 	mux.HandleFunc("POST /api/account/sessions/revoke-others", s.requireSession(s.handleRevokeOtherSessions))

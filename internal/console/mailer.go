@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -101,61 +100,4 @@ func (m *LogMailer) Send(_ context.Context, to, subject, textBody, _ string) err
 	m.Log.Warn("email not sent: no RESEND_API_KEY configured, printing instead",
 		"to", to, "subject", subject, "body", textBody)
 	return nil
-}
-
-// magicLinkEmail renders the sign-in message.
-//
-// Both a plain-text and an HTML body are sent. Text is not a courtesy: some
-// clients strip HTML entirely, and a login email that arrives blank is
-// indistinguishable from one that never arrived.
-func magicLinkEmail(link string, ttl time.Duration) (subject, text, htmlBody string) {
-	subject = "Your sign-in link"
-	minutes := int(ttl.Minutes())
-
-	text = fmt.Sprintf(`Sign in to your object storage console.
-
-%s
-
-This link expires in %d minutes and can only be used once.
-
-If you did not request it, you can ignore this email — nothing has changed.
-`, link, minutes)
-
-	// The link is escaped despite being server-generated: it carries a token,
-	// and treating any URL as trusted in HTML is a habit worth not forming.
-	safe := html.EscapeString(link)
-	htmlBody = fmt.Sprintf(`<!doctype html>
-<html><body style="font-family: system-ui, -apple-system, sans-serif; line-height: 1.5; color: #111;">
-  <h2 style="font-weight: 600;">Sign in to your console</h2>
-  <p><a href="%s" style="display:inline-block; padding:10px 18px; background:#111; color:#fff; text-decoration:none; border-radius:6px;">Sign in</a></p>
-  <p style="color:#555; font-size: 14px;">This link expires in %d minutes and can only be used once.</p>
-  <p style="color:#555; font-size: 14px;">If you did not request it, you can ignore this email — nothing has changed.</p>
-  <p style="color:#888; font-size: 12px; word-break: break-all;">%s</p>
-</body></html>`, safe, minutes, safe)
-
-	return subject, text, htmlBody
-}
-
-// inviteEmail renders an invitation.
-func inviteEmail(link string, ttl time.Duration) (subject, text, htmlBody string) {
-	subject = "You have been invited to the object storage console"
-	days := int(ttl.Hours() / 24)
-
-	text = fmt.Sprintf(`You have been invited to the object storage console.
-
-%s
-
-This invitation expires in %d days.
-`, link, days)
-
-	safe := html.EscapeString(link)
-	htmlBody = fmt.Sprintf(`<!doctype html>
-<html><body style="font-family: system-ui, -apple-system, sans-serif; line-height: 1.5; color: #111;">
-  <h2 style="font-weight: 600;">You have been invited</h2>
-  <p><a href="%s" style="display:inline-block; padding:10px 18px; background:#111; color:#fff; text-decoration:none; border-radius:6px;">Accept invitation</a></p>
-  <p style="color:#555; font-size: 14px;">This invitation expires in %d days.</p>
-  <p style="color:#888; font-size: 12px; word-break: break-all;">%s</p>
-</body></html>`, safe, days, safe)
-
-	return subject, text, htmlBody
 }
