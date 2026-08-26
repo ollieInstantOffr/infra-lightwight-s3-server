@@ -27,14 +27,17 @@ const (
 	RoleMember = "MEMBER"
 )
 
-// User is a console operator. There is no password column: authentication is
-// entirely by emailed link, so there is no password to leak.
+// User is a console operator.
 type User struct {
 	ID          string
 	Email       string
 	Role        string
 	CreatedAt   time.Time
 	LastLoginAt *time.Time
+	// MustChangePassword marks a password somebody else chose. It is populated
+	// by the sign-in path; the listing queries leave it false, because nothing
+	// reading a list of users needs it.
+	MustChangePassword bool
 }
 
 // IsAdmin reports whether the user may manage other users and credentials.
@@ -53,9 +56,10 @@ func NormalizeEmail(email string) string {
 func GetUserByEmail(ctx context.Context, q Querier, email string) (*User, error) {
 	user := &User{}
 	err := q.QueryRow(ctx, `
-		SELECT id::text, email, role, created_at, last_login_at
+		SELECT id::text, email, role, created_at, last_login_at, must_change_password
 		FROM users WHERE email = $1`, NormalizeEmail(email),
-	).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.LastLoginAt)
+	).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.LastLoginAt,
+		&user.MustChangePassword)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
@@ -69,9 +73,10 @@ func GetUserByEmail(ctx context.Context, q Querier, email string) (*User, error)
 func GetUserByID(ctx context.Context, q Querier, id string) (*User, error) {
 	user := &User{}
 	err := q.QueryRow(ctx, `
-		SELECT id::text, email, role, created_at, last_login_at
+		SELECT id::text, email, role, created_at, last_login_at, must_change_password
 		FROM users WHERE id = $1`, id,
-	).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.LastLoginAt)
+	).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.LastLoginAt,
+		&user.MustChangePassword)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}

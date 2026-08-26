@@ -112,10 +112,11 @@ func TouchSession(ctx context.Context, q Querier, hash []byte, idle time.Duratio
 			  AND absolute_expires_at > now()
 			RETURNING user_id
 		)
-		SELECT u.id::text, u.email, u.role, u.created_at, u.last_login_at
+		SELECT u.id::text, u.email, u.role, u.created_at, u.last_login_at, u.must_change_password
 		FROM users u JOIN renewed ON renewed.user_id = u.id`,
 		hash, idle.String(),
-	).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.LastLoginAt)
+	).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.LastLoginAt,
+		&user.MustChangePassword)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSessionInvalid
 	}
