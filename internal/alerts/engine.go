@@ -112,11 +112,33 @@ func (e *Engine) Run(ctx context.Context) {
 }
 
 // EvaluateOnce runs every enabled rule and then delivers notifications.
+//
+// The whole cycle is held under an advisory lock, because notify() sends a
+// notification before marking it sent: two engines would both select the same
+// pending alert and both send it, and an email cannot be un-sent. A second
+// engine that cannot take the lock skips this tick rather than queueing, so it
+// does not simply run the same duplicate cycle a moment later.
+//
+// This is the only background work that needs it. The blob sweep is safe under
+// per-blob locks, the purges are idempotent, and the metrics collector and log
+// sink accumulate per-process state that is correct to flush from several
+// places at once. See docs/services.md.
 func (e *Engine) EvaluateOnce(ctx context.Context) {
+	ran, err := db.WithAlertEngineLock(ctx, e.Pool, e.evaluateAll)
+	if err != nil {
+		e.Log.Warn("alert evaluation failed", "error", err)
+		return
+	}
+	if !ran {
+		e.Log.Debug("another process is evaluating alerts; skipping this cycle")
+	}
+}
+
+// evaluateAll is the cycle itself, and assumes the caller holds the lock.
+func (e *Engine) evaluateAll(ctx context.Context) error {
 	rules, err := db.ListAlertRules(ctx, e.Pool)
 	if err != nil {
-		e.Log.Warn("could not read alert rules", "error", err)
-		return
+		return fmt.Errorf("read alert rules: %w", err)
 	}
 
 	for _, rule := range rules {
@@ -133,6 +155,7 @@ func (e *Engine) EvaluateOnce(ctx context.Context) {
 	}
 
 	e.notify(ctx)
+	return nil
 }
 
 func (e *Engine) evaluate(ctx context.Context, rule db.AlertRule) {

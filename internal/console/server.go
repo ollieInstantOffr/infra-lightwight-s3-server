@@ -194,6 +194,19 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("The console API is running. The web interface is not built into this binary.\n"))
 }
 
+// ProbeHandler serves only /healthz and /readyz.
+//
+// A role that does not serve the console still has to be answerable to an
+// orchestrator, and its readiness means exactly what the console's does: the
+// database is reachable and the blob store is usable. Reusing the same two
+// handlers is what keeps that true rather than nearly true.
+func (s *Server) ProbeHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	return mux
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok\n"))

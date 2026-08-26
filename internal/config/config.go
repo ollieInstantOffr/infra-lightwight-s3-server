@@ -36,6 +36,10 @@ const (
 type Config struct {
 	Env Environment
 
+	// Role selects which listeners and background workers this process starts.
+	// Defaults to RoleAll, which is the whole server in one process.
+	Role Role
+
 	// Listeners. The S3 API and the console are deliberately separate ports so
 	// that bucket paths can never collide with console routes, and so each can
 	// be mapped to its own hostname in the reverse proxy.
@@ -105,8 +109,17 @@ func Load() (*Config, error) {
 		fail("ENV must be %q or %q, got %q", Development, Production, env)
 	}
 
+	// Parsed before anything else is validated, because the role decides which
+	// settings are required at all.
+	role, err := ParseRole(envStr("ROLE", ""))
+	if err != nil {
+		fail("%v", err)
+		role = RoleAll
+	}
+
 	cfg := &Config{
 		Env:              env,
+		Role:             role,
 		S3Port:           envInt("S3_PORT", defaultS3Port, fail),
 		ConsolePort:      envInt("CONSOLE_PORT", defaultConsolePort, fail),
 		DataDir:          envStr("DATA_DIR", "/data"),
@@ -136,9 +149,17 @@ func Load() (*Config, error) {
 		fail("LOG_SAMPLE_RATE must be between 0 and 1, got %v", cfg.LogSampleRate)
 	}
 
-	validatePort("S3_PORT", cfg.S3Port, fail)
-	validatePort("CONSOLE_PORT", cfg.ConsolePort, fail)
-	if cfg.S3Port == cfg.ConsolePort {
+	// Ports are only checked for the roles that bind them. A worker listens on
+	// nothing and must not be refused startup over a port it will never use.
+	if cfg.Role.ServesS3() {
+		validatePort("S3_PORT", cfg.S3Port, fail)
+	}
+	if cfg.Role.ServesConsole() {
+		validatePort("CONSOLE_PORT", cfg.ConsolePort, fail)
+	}
+	// Only a collision within one process matters. Two containers each binding
+	// 8443 inside their own network namespace is the normal split topology.
+	if cfg.Role == RoleAll && cfg.S3Port == cfg.ConsolePort {
 		fail("S3_PORT and CONSOLE_PORT must differ, both are %d", cfg.S3Port)
 	}
 
@@ -157,12 +178,18 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if cfg.AdminEmail == "" {
-		fail("ADMIN_EMAIL is required; it bootstraps the first console admin")
-	} else if !looksLikeEmail(cfg.AdminEmail) {
-		fail("ADMIN_EMAIL %q is not a valid email address", cfg.AdminEmail)
+	// The bootstrap admin is created by whichever role owns the console. An
+	// s3-only container has no user table concern and no reason to be told.
+	if cfg.Role.ServesConsole() {
+		if cfg.AdminEmail == "" {
+			fail("ADMIN_EMAIL is required; it bootstraps the first console admin")
+		} else if !looksLikeEmail(cfg.AdminEmail) {
+			fail("ADMIN_EMAIL %q is not a valid email address", cfg.AdminEmail)
+		}
 	}
 
+	// Both URLs are checked for shape wherever they are set, but only demanded
+	// from the role that builds links with them.
 	validatePublicURL("PUBLIC_S3_URL", cfg.PublicS3URL, fail)
 	validatePublicURL("PUBLIC_CONSOLE_URL", cfg.PublicConsoleURL, fail)
 
@@ -170,13 +197,17 @@ func Load() (*Config, error) {
 	// development we substitute safe stand-ins so a bare `go run` works.
 	switch env {
 	case Production:
-		if cfg.PublicConsoleURL == "" {
-			fail("PUBLIC_CONSOLE_URL is required in production; magic-link emails need an absolute URL")
+		if cfg.Role.ServesConsole() {
+			if cfg.PublicConsoleURL == "" {
+				fail("PUBLIC_CONSOLE_URL is required in production; the console builds absolute links with it")
+			}
+			if len(cfg.SessionSecret) < 32 {
+				fail("SESSION_SECRET must be at least 32 characters in production (got %d)", len(cfg.SessionSecret))
+			}
 		}
-		if len(cfg.SessionSecret) < 32 {
-			fail("SESSION_SECRET must be at least 32 characters in production (got %d)", len(cfg.SessionSecret))
-		}
-		if len(cfg.CredentialsKey) < 32 {
+		// Both serving roles need it: the S3 API to check a signature, the
+		// console to show a newly created key once. The worker never does.
+		if cfg.Role.NeedsCredentialsKey() && len(cfg.CredentialsKey) < 32 {
 			fail("CREDENTIALS_KEY must be at least 32 characters in production (got %d); "+
 				"changing it makes every existing S3 credential undecryptable", len(cfg.CredentialsKey))
 		}
@@ -222,6 +253,7 @@ func Load() (*Config, error) {
 func (c *Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("env", string(c.Env)),
+		slog.String("role", string(c.Role)),
 		slog.Int("s3_port", c.S3Port),
 		slog.Int("console_port", c.ConsolePort),
 		slog.String("data_dir", c.DataDir),

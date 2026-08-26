@@ -263,8 +263,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	servers := []*namedServer{
-		{
+	var servers []*namedServer
+	if cfg.Role.ServesS3() {
+		servers = append(servers, &namedServer{
 			name: "s3",
 			server: &http.Server{
 				Addr:    fmt.Sprintf(":%d", cfg.S3Port),
@@ -275,8 +276,10 @@ func run() error {
 				IdleTimeout:       120 * time.Second,
 				ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 			},
-		},
-		{
+		})
+	}
+	if cfg.Role.ServesConsole() {
+		servers = append(servers, &namedServer{
 			name: "console",
 			server: &http.Server{
 				Addr:              fmt.Sprintf(":%d", cfg.ConsolePort),
@@ -285,25 +288,41 @@ func run() error {
 				IdleTimeout:       120 * time.Second,
 				ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 			},
-		},
+		})
+	}
+	// The worker listens on nothing, which is the cleanest statement of what it
+	// is. It still needs a probe, so it gets a minimal one — see healthServer.
+	// Whatever the role, the console port answers /healthz and /readyz, so one
+	// healthcheck command and one compose probe work across every topology. A
+	// role that does not serve the console gets a listener that serves nothing
+	// else.
+	if !cfg.Role.ServesConsole() {
+		servers = append(servers, probeOnlyServer(cfg, consoleServer, log))
 	}
 
-	// Background reclamation runs for the life of the process and stops with
-	// the shutdown signal.
-	go runMaintenance(ctx, pool, blobs, log)
-	// Request counts are accumulated in memory and flushed on a ticker, so the
-	// request path never waits on the database to record a graph.
+	// These two run in every role, not only the worker.
+	//
+	// Both accumulate what *this process* did: the collector counts the
+	// requests it served, and the sink holds this process's request logs and
+	// the warnings and errors the logger tees into it. A worker that did not
+	// run the sink would buffer its own warnings forever and persist none of
+	// them. Running several is correct rather than merely tolerable — see
+	// docs/services.md.
 	go collector.Run(ctx, pool, log)
-	// Request logs and captured server events flush on their own ticker, so
-	// neither the request path nor a log call waits on the database.
 	go logSink.Run(ctx, pool, log)
+
+	if cfg.Role.RunsWorkers() {
+		// Background reclamation runs for the life of the process and stops
+		// with the shutdown signal.
+		go runMaintenance(ctx, pool, blobs, log)
 
 	// Alerts evaluate against the metrics and logs already being collected, so
 	// this adds queries on a one-minute ticker rather than any new bookkeeping.
-	alertEngine := &alerts.Engine{
-		Pool: pool, Blobs: blobs, Log: log, Notifier: consoleServer,
+		alertEngine := &alerts.Engine{
+			Pool: pool, Blobs: blobs, Log: log, Notifier: consoleServer,
+		}
+		go alertEngine.Run(ctx)
 	}
-	go alertEngine.Run(ctx)
 
 	// serveErr carries the first listener failure. It is buffered so a failing
 	// goroutine never blocks on a shutdown that is already under way.
@@ -361,6 +380,25 @@ func nodeName() string {
 type namedServer struct {
 	name   string
 	server *http.Server
+}
+
+// probeOnlyServer binds the console port and serves nothing but the health
+// probes.
+//
+// It exists so that the port an orchestrator probes does not depend on which
+// role a container runs: `s3d healthcheck` and the compose healthcheck read
+// CONSOLE_PORT, and this keeps that true for the s3 and worker roles too.
+func probeOnlyServer(cfg *config.Config, console *console.Server, log *slog.Logger) *namedServer {
+	return &namedServer{
+		name: "probe",
+		server: &http.Server{
+			Addr:              fmt.Sprintf(":%d", cfg.ConsolePort),
+			Handler:           console.ProbeHandler(),
+			ReadHeaderTimeout: 15 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		},
+	}
 }
 
 func newLogger(cfg *config.Config, sink *logs.Sink) *slog.Logger {
