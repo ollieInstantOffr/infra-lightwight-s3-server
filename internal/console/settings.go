@@ -1,6 +1,8 @@
 package console
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -172,4 +174,125 @@ func validateLifecycle(rules []db.LifecycleRule) string {
 		}
 	}
 	return ""
+}
+
+// Alert email settings.
+//
+// The provider API key is write-only over this API. It goes in, and the only
+// thing that ever comes back out is whether one is present — a settings screen
+// that redisplays a secret turns every "view settings" into a way to read it.
+
+type alertEmailRequest struct {
+	Enabled bool   `json:"enabled"`
+	From    string `json:"from"`
+	// APIKey empty means "leave the stored one alone", which is what lets the
+	// screen save a change to the other fields without ever holding the key.
+	APIKey string `json:"apiKey"`
+}
+
+// handleGetAlertEmailSettings reports the current configuration.
+func (s *Server) handleGetAlertEmailSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.resolveAlertEmail(r.Context())
+	if err != nil {
+		s.internalError(w, r, "read alert email settings", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": settings.Enabled,
+		"from":    settings.From,
+		// Presence, never the value.
+		"hasApiKey": settings.APIKey != "",
+		"updatedAt": settings.UpdatedAt,
+	})
+}
+
+// handleSaveAlertEmailSettings stores the configuration.
+func (s *Server) handleSaveAlertEmailSettings(w http.ResponseWriter, r *http.Request) {
+	var request alertEmailRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "Send a JSON body with enabled, from and optionally apiKey.")
+		return
+	}
+
+	request.From = strings.TrimSpace(request.From)
+	request.APIKey = strings.TrimSpace(request.APIKey)
+
+	ctx := r.Context()
+	// Enabling without something to send with would report success and then
+	// quietly fail on the first alert, which is the failure mode this screen
+	// exists to prevent.
+	if request.Enabled {
+		if !looksLikeEmail(db.NormalizeEmail(request.From)) {
+			writeError(w, http.StatusBadRequest,
+				"A from-address is needed to send alerts, and it must be one Resend has verified.")
+			return
+		}
+		if request.APIKey == "" {
+			current, err := s.resolveAlertEmail(ctx)
+			if err != nil {
+				s.internalError(w, r, "read alert email settings", err)
+				return
+			}
+			if current.APIKey == "" {
+				writeError(w, http.StatusBadRequest, "An API key is needed before alert email can be enabled.")
+				return
+			}
+		}
+	}
+
+	actor, _ := UserFrom(ctx)
+	if err := db.SaveAlertEmailSettings(ctx, s.DB, s.Cipher,
+		request.Enabled, request.From, request.APIKey, actor.ID); err != nil {
+		s.internalError(w, r, "save alert email settings", err)
+		return
+	}
+
+	s.Log.Info("alert email settings changed",
+		"by", actor.Email, "enabled", request.Enabled, "keyReplaced", request.APIKey != "")
+	s.audit(r, db.ActionAlertEmailSettings, "settings", "alert-email",
+		map[string]any{"enabled": request.Enabled, "keyReplaced": request.APIKey != ""})
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Saved."})
+}
+
+// handleTestAlertEmail sends a message to the caller's own address.
+//
+// A mail configuration that is only exercised when something is already broken
+// is a mail configuration nobody trusts. Sending to the caller rather than an
+// arbitrary address keeps this from being a way to mail strangers.
+func (s *Server) handleTestAlertEmail(w http.ResponseWriter, r *http.Request) {
+	actor, _ := UserFrom(r.Context())
+
+	subject := "Pail test message"
+	text := "This is a test from Pail's alert email settings.\n\n" +
+		"If you are reading it, alert notifications will reach you.\n"
+	htmlBody := "<p>This is a test from Pail's alert email settings.</p>" +
+		"<p>If you are reading it, alert notifications will reach you.</p>"
+
+	if err := s.Mailer.Send(r.Context(), actor.Email, subject, text, htmlBody); err != nil {
+		if errors.Is(err, ErrMailNotConfigured) {
+			writeError(w, http.StatusBadRequest,
+				"Nothing is configured to send with. Save an API key and a from-address first.")
+			return
+		}
+		// The provider's own message names the actual problem — an unverified
+		// sender, a rejected key — far better than a generic failure would.
+		s.Log.Error("test email failed", "to", actor.Email, "error", err)
+		writeError(w, http.StatusBadGateway, "The provider rejected it: "+err.Error())
+		return
+	}
+
+	s.Log.Info("test email sent", "to", actor.Email)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Sent to " + actor.Email + ". If it does not arrive, check the spam folder and the sender domain.",
+	})
+}
+
+// resolveAlertEmail reads the effective settings, including the environment
+// fallback the SettingsMailer applies.
+func (s *Server) resolveAlertEmail(ctx context.Context) (db.AlertEmailSettings, error) {
+	if resolver, ok := s.Mailer.(*SettingsMailer); ok {
+		return resolver.Resolve(ctx)
+	}
+	return db.GetAlertEmailSettings(ctx, s.DB, s.Cipher)
 }

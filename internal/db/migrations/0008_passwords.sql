@@ -46,7 +46,10 @@ CREATE TABLE app_settings (
     -- Encrypted with the same cipher as S3 secret keys. A settings table that
     -- holds a provider API key in plain text is a database dump away from
     -- being someone else's mail account.
-    resend_api_key   BYTEA,
+    resend_api_key       BYTEA,
+    -- The cipher returns the nonce separately rather than prefixing it, and
+    -- credentials stores it the same way.
+    resend_api_key_nonce BYTEA,
     resend_from      TEXT NOT NULL DEFAULT '',
     resend_enabled   BOOLEAN NOT NULL DEFAULT false,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

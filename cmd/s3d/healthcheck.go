@@ -81,6 +81,9 @@ Usage:
   s3d credential create [note]     create an S3 access key pair
   s3d credential list              list credentials
   s3d credential revoke <key-id>   revoke a credential
+  s3d user list                    list console users
+  s3d user set-password <email>    set a user's password
+  s3d user promote <email>         make a user an administrator
   s3d selftest                     measure throughput over loopback, no proxy
 
 Configuration is read from the environment. See .env.example for every

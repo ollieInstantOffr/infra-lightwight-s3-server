@@ -32,15 +32,16 @@ const (
 	// Changing a scope is recorded separately from creating a key because
 	// widening one is a privilege escalation that takes effect on the next
 	// request, and it should be as traceable as issuing a new key.
-	ActionCredentialScope = "credential.scope"
-	ActionUserInvite      = "user.invite"
-	ActionUserCreate      = "user.create"
-	ActionPasswordChange  = "user.password_change"
-	ActionPasswordReset   = "user.password_reset"
-	ActionUserRemove      = "user.remove"
-	ActionUserRole        = "user.role"
-	ActionInviteRevoke    = "invite.revoke"
-	ActionSessionRevoke   = "session.revoke"
+	ActionCredentialScope    = "credential.scope"
+	ActionUserInvite         = "user.invite"
+	ActionUserCreate         = "user.create"
+	ActionPasswordChange     = "user.password_change"
+	ActionPasswordReset      = "user.password_reset"
+	ActionUserRemove         = "user.remove"
+	ActionUserRole           = "user.role"
+	ActionInviteRevoke       = "invite.revoke"
+	ActionSessionRevoke      = "session.revoke"
+	ActionAlertEmailSettings = "settings.alert_email"
 )
 
 // AuditEvent is one recorded action.

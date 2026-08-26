@@ -10,11 +10,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/db"
+	"github.com/ollieInstantOffr/infra-lightwight-s3-server/internal/secrets"
 )
 
 // Mailer sends the console's outbound email.
@@ -100,4 +104,70 @@ func (m *LogMailer) Send(_ context.Context, to, subject, textBody, _ string) err
 	m.Log.Warn("email not sent: no RESEND_API_KEY configured, printing instead",
 		"to", to, "subject", subject, "body", textBody)
 	return nil
+}
+
+// SettingsMailer resolves its configuration from the database on every send.
+//
+// The mailer it replaced was built once at startup from RESEND_API_KEY, so
+// correcting a bad key meant editing .env and redeploying — at exactly the
+// moment alerts had stopped arriving. Reading per send costs one indexed query
+// on a path that only runs when an alert fires, and makes the console's
+// settings screen take effect immediately.
+type SettingsMailer struct {
+	DB     *db.Pool
+	Cipher *secrets.Cipher
+	Log    *slog.Logger
+
+	// envAPIKey and envFrom are the initial values from the environment. They
+	// apply only until something is saved in the console, so an existing
+	// deployment keeps working across the upgrade without being edited.
+	envAPIKey string
+	envFrom   string
+}
+
+// NewSettingsMailer builds a mailer backed by the settings table.
+func NewSettingsMailer(pool *db.Pool, cipher *secrets.Cipher, log *slog.Logger, envAPIKey, envFrom string) *SettingsMailer {
+	return &SettingsMailer{DB: pool, Cipher: cipher, Log: log, envAPIKey: envAPIKey, envFrom: envFrom}
+}
+
+// ErrMailNotConfigured means nothing has been set up to send with. It is a
+// distinct error because the alert engine treats it as "nowhere to deliver"
+// rather than a delivery failure worth retrying.
+var ErrMailNotConfigured = errors.New("no email provider is configured")
+
+// Resolve returns the effective settings, falling back to the environment
+// while nothing has been saved.
+func (m *SettingsMailer) Resolve(ctx context.Context) (db.AlertEmailSettings, error) {
+	settings, err := db.GetAlertEmailSettings(ctx, m.DB, m.Cipher)
+	if err != nil {
+		return db.AlertEmailSettings{}, err
+	}
+	if settings.APIKey == "" && m.envAPIKey != "" {
+		// Nothing saved yet: the environment is the initial value. Enabled is
+		// implied, because a deployment that set RESEND_API_KEY was already
+		// sending mail and must not stop on upgrade.
+		settings.APIKey = m.envAPIKey
+		settings.Enabled = true
+		if settings.From == "" {
+			settings.From = m.envFrom
+		}
+	}
+	return settings, nil
+}
+
+// Send delivers a message using whatever is currently configured.
+func (m *SettingsMailer) Send(ctx context.Context, to, subject, textBody, htmlBody string) error {
+	settings, err := m.Resolve(ctx)
+	if err != nil {
+		return err
+	}
+	if !settings.Configured() {
+		return ErrMailNotConfigured
+	}
+	sender := &ResendMailer{
+		APIKey: settings.APIKey,
+		From:   settings.From,
+		Client: &http.Client{Timeout: resendTimeout},
+	}
+	return sender.Send(ctx, to, subject, textBody, htmlBody)
 }

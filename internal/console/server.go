@@ -144,6 +144,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/system", s.requireSession(s.handleSystem))
 	mux.HandleFunc("GET /api/audit", s.requireAdmin(s.handleAuditLog))
 
+	// Alert email. Admin-only: the API key is a shared secret for the whole
+	// deployment, and a test send is a way to make the server originate mail.
+	mux.HandleFunc("GET /api/settings/alert-email", s.requireAdmin(s.handleGetAlertEmailSettings))
+	mux.HandleFunc("PUT /api/settings/alert-email", s.requireAdmin(s.handleSaveAlertEmailSettings))
+	mux.HandleFunc("POST /api/settings/alert-email/test", s.requireAdmin(s.handleTestAlertEmail))
+
 	// Account and sessions.
 	mux.HandleFunc("POST /api/account/password", s.requireSession(s.handleChangePassword))
 	mux.HandleFunc("GET /api/account/sessions", s.requireSession(s.handleListSessions))

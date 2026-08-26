@@ -135,5 +135,6 @@ func auditActions() []map[string]string {
 		{"value": db.ActionUserInvite, "label": "User invited (before 0008)"},
 		{"value": db.ActionInviteRevoke, "label": "Invitation withdrawn (before 0008)"},
 		{"value": db.ActionSessionRevoke, "label": "Session revoked"},
+		{"value": db.ActionAlertEmailSettings, "label": "Alert email settings changed"},
 	}
 }

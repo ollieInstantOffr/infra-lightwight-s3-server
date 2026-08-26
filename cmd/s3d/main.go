@@ -58,6 +58,14 @@ func main() {
 		return
 	}
 
+	if handled, err := runUserCommand(args); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if handled, err := runSelftest(args); handled {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -193,17 +201,23 @@ func run() error {
 	}
 	log.Info("bootstrap admin ready", "email", admin.Email)
 
-	var mailer console.Mailer
-	if cfg.ResendConfigured() {
-		mailer = console.NewResendMailer(cfg.ResendAPIKey, cfg.ResendFrom)
-	} else {
-		// Without a key the sign-in link is logged instead of sent, which keeps
-		// local development usable. In production that is a misconfiguration.
-		mailer = &console.LogMailer{Log: log}
-		if cfg.Env == config.Production {
-			log.Warn("RESEND_API_KEY is not set: sign-in links will be written to this log instead of emailed")
-		}
+	// EnsureAdmin cannot invent a password, so on a fresh deployment — and on
+	// the first start after upgrading to password authentication — the admin
+	// account exists but nobody can sign in to it. Saying so here, with the
+	// command that fixes it, turns a sign-in screen that rejects everything
+	// into something self-explaining.
+	if hasPassword, err := db.HasPassword(startupCtx, pool, admin.Email); err != nil {
+		log.Warn("could not check whether the bootstrap admin has a password", "error", err)
+	} else if !hasPassword {
+		log.Warn("the bootstrap admin has no password and cannot sign in",
+			"email", admin.Email,
+			"fix", "docker compose exec s3d s3d user set-password "+admin.Email)
 	}
+
+	// Email is no longer part of signing in. It carries alert notifications
+	// only, and is configured in the console rather than here — these values
+	// are the initial setting for a deployment that has not set one yet.
+	mailer := console.NewSettingsMailer(pool, cipher, log, cfg.ResendAPIKey, cfg.ResendFrom)
 
 	consoleServer := &console.Server{
 		DB:            pool,

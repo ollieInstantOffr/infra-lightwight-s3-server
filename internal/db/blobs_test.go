@@ -54,6 +54,8 @@ func testPool(t *testing.T) *Pool {
 		`DELETE FROM request_logs`, `DELETE FROM server_events`,
 		`DELETE FROM alerts`, `DELETE FROM alert_rules`, `DELETE FROM request_metrics`,
 		`DELETE FROM login_attempts`, `DELETE FROM sessions`, `DELETE FROM users`,
+		`UPDATE app_settings SET resend_enabled = false, resend_from = '',
+		 resend_api_key = NULL, resend_api_key_nonce = NULL WHERE id = true`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatalf("reset (%s): %v", stmt, err)
