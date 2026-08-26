@@ -10,7 +10,49 @@ image.
 
 ## Unreleased
 
-Nothing yet.
+### Console authentication is now email and password
+
+Signing in no longer emails a link. The console previously could not let anyone
+in at all when the mail provider was unreachable or unconfigured, which is a
+poor property for the tool you reach for when something is wrong.
+
+- Sign in with an email address and a password.
+- Administrators create users with a starting password shown once, instead of
+  sending invitations. The user must replace it on first sign-in, so it stops
+  being a password two people know.
+- `s3d user list`, `s3d user set-password` and `s3d user promote` run on the
+  host and work when nobody can sign in at all.
+- Sign-in attempts are throttled per address and per client address.
+- Resend is no longer part of signing in. It now carries alert notifications
+  only, and is configured in the console under **Settings** rather than by
+  environment variable — so a rejected API key can be corrected at the moment
+  alerts stop arriving, without editing `.env` and redeploying.
+
+### Upgrade notes
+
+**Nobody can sign in until a password is set.** No account has one after the
+migration, including the bootstrap administrator, and the sign-in screen will
+reject every attempt until you run:
+
+```bash
+docker compose exec s3d s3d user set-password you@example.com
+```
+
+The server logs a warning naming this command on every start until it is done,
+and the sign-in screen shows it rather than an unexplained failure.
+
+Pending invitations stop working. Anyone who had one but never accepted it
+needs an account creating for them.
+
+`RESEND_API_KEY` and `RESEND_FROM` are still read, as the initial value for the
+alert email setting, so alert delivery survives the upgrade untouched. Once the
+setting is saved in the console, the stored value wins and the environment is
+ignored.
+
+**Rolling back to 1.0.0 works.** `magic_links` and `invites` are left in place
+for one release precisely so the previous image still finds the schema it
+expects. They are dropped in a later release, after which rolling back past
+this point is no longer supported.
 
 ## 1.0.0
 

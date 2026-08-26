@@ -250,22 +250,22 @@ configure() {
     "Administrator email" "$(read_env ADMIN_EMAIL || echo '')"
 
   # ── Email ──────────────────────────────────────────────────────────────────
-  heading "3. Sending sign-in emails"
-  muted "Sign-in is passwordless: each attempt emails a single-use link."
-  muted "Without a provider, links are written to the container log instead —"
-  muted "workable alone, but nobody else can sign in."
+  heading "3. Alert email"
+  muted "Signing in uses a password and never needs email. This is only for"
+  muted "alert notifications — without it, alerts still appear in the console,"
+  muted "they just do not reach you when you are not looking at it."
+  muted "It can also be configured later under Settings in the console."
   printf '\n'
 
   local resend_key="" resend_from=""
-  if confirm "Configure Resend for outbound email?" N; then
+  if confirm "Configure Resend for alert email?" N; then
     ask_secret resend_key "Resend API key (starts with re_)"
     if [[ -n $resend_key ]]; then
       local domain=${admin_email#*@}
       ask resend_from "From address" "Pail <no-reply@$domain>"
     fi
   else
-    muted "Skipped. Find your sign-in link with:"
-    muted "  ${COMPOSE[*]} logs s3d | grep callback"
+    muted "Skipped. Set it later in the console under Settings."
   fi
 
   # ── Region ─────────────────────────────────────────────────────────────────
@@ -448,23 +448,23 @@ offer_first_key() {
 }
 
 show_next_steps() {
-  local console_url s3_url has_email
+  local console_url s3_url admin_email
   console_url=$(read_env PUBLIC_CONSOLE_URL || echo "http://localhost:8444")
   s3_url=$(read_env PUBLIC_S3_URL || echo "http://localhost:8443")
-  has_email=$(read_env RESEND_API_KEY || echo "")
+  admin_email=$(read_env ADMIN_EMAIL || echo "your-admin@example.com")
 
   heading "Ready"
   printf '  %-10s %s%s%s\n' "Console" "$CYAN" "$console_url" "$RESET"
   printf '  %-10s %s%s%s\n' "S3 API" "$CYAN" "$s3_url" "$RESET"
 
   heading "Signing in"
-  info "Open the console and enter: $(read_env ADMIN_EMAIL || echo 'your admin address')"
-
-  if [[ -z $has_email ]]; then
-    printf '\n'
-    warn "No email provider is configured, so the link goes to the log:"
-    printf '\n    %s%s logs s3d | grep callback%s\n' "$DIM" "${COMPOSE[*]}" "$RESET"
-  fi
+  # The admin account exists but has no password: nothing can invent one for
+  # it, so the very first thing anyone must do is set it here.
+  info "Set the administrator password, then sign in as $admin_email:"
+  printf '\n    %s%s exec s3d s3d user set-password %s%s\n' \
+    "$DIM" "${COMPOSE[*]}" "$admin_email" "$RESET"
+  printf '\n'
+  muted "It asks twice and does not echo, so it stays out of your shell history."
 
   heading "Everyday commands"
   # Width chosen to fit the longest command below; a narrower column would

@@ -57,7 +57,7 @@ Four values have no sensible default:
 
 | Variable            | What it is                                                     |
 | ------------------- | -------------------------------------------------------------- |
-| `ADMIN_EMAIL`       | The first administrator. Can always sign in, invites the rest. |
+| `ADMIN_EMAIL`       | The first administrator. Re-promoted on every start.           |
 | `POSTGRES_PASSWORD` | Anything; it never leaves the compose network.                 |
 | `SESSION_SECRET`    | Signs console session cookies. `openssl rand -base64 32`        |
 | `CREDENTIALS_KEY`   | Encrypts S3 secret keys at rest. **Back this up.**              |
@@ -66,12 +66,15 @@ Then `docker compose up -d`.
 
 </details>
 
-Sign in with your `ADMIN_EMAIL`. Without a Resend key the sign-in link is
-written to the log rather than emailed:
+The administrator account is created on first start, but nothing can invent a
+password for it, so set one before signing in:
 
 ```bash
-docker compose logs s3d | grep callback
+docker compose exec s3d s3d user set-password you@example.com
 ```
+
+It asks twice and does not echo, so the password stays out of your shell
+history. Then sign in at the console with that address and password.
 
 ---
 
@@ -179,8 +182,8 @@ prefix, and whether the key may read, write or delete. Keys are unrestricted
 unless narrowed, so nothing changes until you choose to. A scoped key sees only
 the buckets it can use, and listing a bucket shows only its own prefix.
 
-**Console** — passwordless sign-in, an object browser with previews and
-drag-and-drop upload, access keys, users and invitations, version history with
+**Console** — email and password sign-in, an object browser with previews and
+drag-and-drop upload, access keys, user management, version history with
 restore, an audit log, request metrics, and a system health screen.
 
 **Performance** — request volume, error rate and latency percentiles for
@@ -285,6 +288,11 @@ headroom, and whether the metadata store is answering.
 dashboard, a starting set of alerting rules, and a note on which alerts are
 better left to Pail's own engine and which to Prometheus.
 
+Alert notifications are emailed through Resend, configured in the console under
+**Settings** rather than by environment variable — so a rejected API key can be
+corrected at the moment alerts stop arriving, without editing `.env` and
+redeploying. The key is encrypted at rest and never sent back to the browser.
+
 Set `METRICS_TOKEN` to let a scraper in. Without it the endpoint is still there
 but only a signed-in administrator can read it — bucket names, object counts and
 traffic volume together describe who is using the system and how much.
@@ -306,6 +314,22 @@ docker compose exec s3d s3d credential create "ci-deploy"
 docker compose exec s3d s3d credential list
 docker compose exec s3d s3d credential revoke AKIA...
 ```
+
+### Forgotten passwords
+
+There is no reset email, deliberately: the console does not depend on a mail
+provider to let anyone in. An administrator can set a new password for anyone
+from the Users screen, and when nobody can sign in at all, the binary can:
+
+```bash
+docker compose exec s3d s3d user list
+docker compose exec s3d s3d user set-password someone@example.com
+docker compose exec s3d s3d user promote someone@example.com
+```
+
+`set-password` prompts twice without echoing, so the password does not reach
+your shell history or the process list. It also signs out every device that
+account was signed in on, since the old password is no longer trusted.
 
 `ADMIN_EMAIL` is re-promoted to administrator on every start, so an accidentally
 removed admin is fixed by a restart.
